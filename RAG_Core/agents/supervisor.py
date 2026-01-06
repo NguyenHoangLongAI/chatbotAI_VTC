@@ -43,8 +43,7 @@ Context liên quan: {relevant_context}
 Hãy trả lời đúng định dạng JSON:
 {{
   "context_summary": "Tóm tắt ngắn gọn ngữ cảnh (nếu có)",
-  "agent": "FAQ" hoặc "CHATTER" hoặc "REPORTER" hoặc "OTHER",
-  "reasoning": "Lý do chọn agent này"
+  "agent": "FAQ" hoặc "CHATTER" hoặc "REPORTER" hoặc "OTHER"
 }}
 
 Chỉ trả về JSON, không thêm text nào khác."""

@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 class GraderAgent:
     def __init__(self):
         self.name = "GRADER"
-        self.reranking_threshold = 0.5
+        self.reranking_threshold = 0.6
 
     def process(self, question: str, documents: List[Dict[str, Any]], **kwargs) -> Dict[str, Any]:
         """

@@ -3,6 +3,7 @@
 from typing import Dict, Any, List, AsyncIterator
 from models.llm_model import llm_model
 import logging
+from config.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -12,7 +13,7 @@ class GeneratorAgent:
         self.name = "GENERATOR"
 
         # Standard prompt (unchanged)
-        self.standard_prompt = """Bạn là một chuyên viên tư vấn khách hàng người Việt Nam thân thiện và chuyên nghiệp.
+        self.standard_prompt = """Bạn là một chuyên viên tư vấn khách hàng người Việt Nam thân thiện và chuyên nghiệp - chuyên gia về chuyển đổi số và công nghệ.
 
 Câu hỏi của khách hàng: "{question}"
 
@@ -22,16 +23,33 @@ Thông tin tham khảo từ tài liệu:
 Lịch sử trò chuyện gần đây:
 {history}
 
-Yêu cầu trả lời:
-- Trả lời bằng giọng văn tự nhiên như người Việt Nam nói chuyện
-- Trả lời thẳng vào vấn đề, ngắn gọn súc tích
-- Dựa vào thông tin tài liệu nhưng diễn đạt theo cách hiểu của bạn
-- Kết thúc bằng câu hỏi ngắn để tiếp tục hỗ trợ nếu cần
+===== HƯỚNG DẪN TRẢ LỜI =====
 
-Hãy trả lời như đang nói chuyện trực tiếp với khách hàng:"""
+BƯỚC 1: Tự đánh giá chất lượng tài liệu
+- Tài liệu có liên quan trực tiếp đến câu hỏi không?
+- Thông tin có đủ chi tiết để trả lời chính xác không?
+- Tài liệu có giải đáp đúng vấn đề người dùng đang hỏi không?
+
+BƯỚC 2: Chọn cách trả lời phù hợp
+
+NẾU TÀI LIỆU ĐỦ TỐT:
+→ Trả lời dựa trên thông tin trong tài liệu
+→ Diễn đạt bằng giọng văn tự nhiên như người Việt Nam nói chuyện
+→ Trả lời thẳng vào vấn đề, ngắn gọn súc tích
+→ Kết thúc bằng câu hỏi ngắn để tiếp tục hỗ trợ nếu cần
+
+NẾU TÀI LIỆU KHÔNG ĐỦ TỐT/KHÔNG LIÊN QUAN:
+→ Bắt đầu bằng: "Dựa trên tổng hợp từ các nguồn thông tin, câu trả lời bạn có thể tham khảo như sau:"
+→ Dựa trên kiến thức chuyên môn của bạn về chuyển đổi số, cung cấp:
+  • Câu trả lời hữu ích mang tính tham khảo
+  • Chia sẻ kiến thức chung về chủ đề (nếu có)
+  • Gợi ý hướng tìm hiểu hoặc giải pháp thay thế
+→ Cuối cùng đề xuất: "Để được tư vấn chính xác hơn, bạn vui lòng liên hệ hotline: {support_phone}"
+
+Hãy trả lời:"""
 
         # Follow-up prompt (unchanged)
-        self.followup_prompt = """Bạn là một chuyên viên tư vấn khách hàng người Việt Nam thân thiện và chuyên nghiệp.
+        self.followup_prompt = """Bạn là một chuyên viên tư vấn khách hàng người Việt Nam thân thiện và chuyên nghiệp - chuyên gia về chuyển đổi số và công nghệ.
 
 🔍 NGỮ CẢNH CUỘC TRÒ CHUYỆN:
 {context_summary}
@@ -39,23 +57,33 @@ Hãy trả lời như đang nói chuyện trực tiếp với khách hàng:"""
 📝 LỊCH SỬ GẦN NHẤT:
 {recent_history}
 
-❓ CÂU HỎI FOLLOW-UP CỦA KHÁCH HÀNG: "{question}"
+❓ CÂU HỎI FOLLOW-UP: "{question}"
 
 📚 THÔNG TIN TÀI LIỆU LIÊN QUAN:
 {documents}
 
-⚠️ YÊU CẦU ĐẶC BIỆT cho follow-up question:
-1. Nhận biết rằng khách hàng đang hỏi tiếp về chủ đề đã thảo luận
-2. Tham chiếu đến thông tin đã cung cấp trước đó một cách tự nhiên
-3. Trả lời cụ thể vào phần mà khách hàng muốn biết thêm
-4. KHÔNG lặp lại toàn bộ thông tin đã nói, chỉ tập trung vào phần được hỏi
+===== HƯỚNG DẪN TRẢ LỜI =====
 
-📋 YÊU CẦU CHUNG:
-- Trả lời bằng giọng văn tự nhiên như người Việt Nam nói chuyện
-- Ngắn gọn, súc tích, đúng trọng tâm
-- Kết thúc bằng câu hỏi để tiếp tục hỗ trợ nếu cần
+BƯỚC 1: Tự đánh giá chất lượng tài liệu
+- Tài liệu có liên quan đến câu hỏi follow-up này không?
+- Thông tin có đủ để trả lời cụ thể phần khách hàng muốn biết thêm không?
+
+BƯỚC 2: Chọn cách trả lời phù hợp
+
+NẾU TÀI LIỆU ĐỦ TỐT:
+→ Nhận biết rằng khách hàng đang hỏi tiếp về chủ đề đã thảo luận
+→ Tham chiếu đến thông tin đã cung cấp trước đó một cách tự nhiên
+→ Trả lời cụ thể vào phần được hỏi, KHÔNG lặp lại toàn bộ thông tin cũ
+→ Ngắn gọn, súc tích, đúng trọng tâm
+
+NẾU TÀI LIỆU KHÔNG ĐỦ TỐT:
+→ Bắt đầu: "Dựa trên tổng hợp từ các nguồn thông tin, câu trả lời bạn có thể tham khảo như sau:"
+→ Dựa trên kiến thức chuyên môn về chuyển đổi số để trả lời
+→ Thể hiện sự chuyên nghiệp nhưng khiêm tốn
+→ Cuối cùng: "Để được tư vấn chính xác hơn, vui lòng liên hệ hotline: {support_phone}"
 
 Hãy trả lời:"""
+
 
     def _deduplicate_references(self, references: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Loại bỏ references trùng lặp"""
@@ -180,13 +208,15 @@ Hãy trả lời:"""
                     question=question,
                     context_summary=context_summary,
                     recent_history=history_text,
-                    documents=doc_text
+                    documents=doc_text,
+                    support_phone=settings.SUPPORT_PHONE
                 )
             else:
                 prompt = self.standard_prompt.format(
                     question=question,
                     history=history_text,
-                    documents=doc_text
+                    documents=doc_text,
+                    support_phone=settings.SUPPORT_PHONE
                 )
 
             # Generate answer (non-streaming)
@@ -248,13 +278,15 @@ Hãy trả lời:"""
                     question=question,
                     context_summary=context_summary,
                     recent_history=history_text,
-                    documents=doc_text
+                    documents=doc_text,
+                    support_phone=settings.SUPPORT_PHONE
                 )
             else:
                 prompt = self.standard_prompt.format(
                     question=question,
                     history=history_text,
-                    documents=doc_text
+                    documents=doc_text,
+                    support_phone=settings.SUPPORT_PHONE
                 )
 
             logger.info(f"📝 Generator: Prompt prepared, length={len(prompt)}")
