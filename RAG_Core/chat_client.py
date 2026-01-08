@@ -12,7 +12,7 @@ import time
 
 
 class StreamingChatClient:
-    def __init__(self, base_url: str = "https://c9a364a6c701.ngrok-free.app"):
+    def __init__(self, base_url: str = "http://localhost:8501/"):
         self.base_url = base_url
         self.session = requests.Session()
         self.chat_history = []

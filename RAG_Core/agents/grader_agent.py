@@ -71,8 +71,8 @@ class GraderAgent:
                             "document_id": doc.get("document_id"),
                             "type": "DOCUMENT",
                             "description": doc.get("description", "")[:500],
-                            "rerank_score": round(doc.get("rerank_score", 0), 4),
-                            "similarity_score": round(doc.get("similarity_score", 0), 4)
+                            "rerank_score": round(doc.get("rerank_score", 0), 5),
+                            "similarity_score": round(doc.get("similarity_score", 0), 5)
                         }
                         for doc in qualified_docs
                     ],

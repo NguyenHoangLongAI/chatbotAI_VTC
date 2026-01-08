@@ -14,6 +14,20 @@ except Exception:
 
 class Settings(BaseSettings):
     """App settings"""
+    GRADER_STAGE1_THRESHOLD: float = 0.4
+
+    # Stage 2: Semantic filter (medium threshold - refine results)
+    GRADER_STAGE2_THRESHOLD: float = 0.55
+
+    # Stage 3: LLM validation (strict threshold - final check)
+    GRADER_LLM_THRESHOLD: float = 0.65
+
+    # Control flags - Enable/disable each stage
+    GRADER_USE_STAGE2: bool = True  # Bật/tắt Stage 2
+    GRADER_USE_LLM: bool = True  # Bật/tắt Stage 3 (LLM)
+
+    # LLM validation limits
+    GRADER_MAX_LLM_DOCS: int = 10  # Số documents tối đa cho LLM validate
 
     # ===== Milvus =====
     MILVUS_HOST: str = "milvus"
@@ -32,7 +46,7 @@ class Settings(BaseSettings):
 
     # ===== Search / RAG =====
     SIMILARITY_THRESHOLD: float = 0.2
-    TOP_K: int = 20
+    TOP_K: int = 50
     MAX_ITERATIONS: int = 5
 
     # ===== FAQ OPTIMIZATION SETTINGS =====
@@ -90,3 +104,37 @@ def get_faq_config() -> dict:
         "consistency_bonus": settings.FAQ_CONSISTENCY_BONUS,
         "consistency_threshold": settings.FAQ_CONSISTENCY_THRESHOLD
     }
+
+
+def get_grader_preset(mode: str = "balanced") -> dict:
+    """
+    Các preset cấu hình cho grader
+
+    Modes:
+    - "fast": Ưu tiên tốc độ, chỉ dùng Stage 1
+    - "balanced": Cân bằng tốc độ & độ chính xác (Stage 1 + 2)
+    - "accurate": Ưu tiên độ chính xác cao nhất (Full pipeline)
+    """
+    presets = {
+        "fast": {
+            "GRADER_STAGE1_THRESHOLD": 0.5,
+            "GRADER_USE_STAGE2": False,
+            "GRADER_USE_LLM": False
+        },
+        "balanced": {
+            "GRADER_STAGE1_THRESHOLD": 0.45,
+            "GRADER_STAGE2_THRESHOLD": 0.55,
+            "GRADER_USE_STAGE2": True,
+            "GRADER_USE_LLM": False
+        },
+        "accurate": {
+            "GRADER_STAGE1_THRESHOLD": 0.4,
+            "GRADER_STAGE2_THRESHOLD": 0.5,
+            "GRADER_LLM_THRESHOLD": 0.65,
+            "GRADER_USE_STAGE2": True,
+            "GRADER_USE_LLM": True,
+            "GRADER_MAX_LLM_DOCS": 15
+        }
+    }
+
+    return presets.get(mode, presets["balanced"])
