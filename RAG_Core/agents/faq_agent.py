@@ -97,6 +97,7 @@ Trả lời:"""
             # ===============================================
             is_confident = (
                 similarity_score >= self.force_similarity_threshold
+                or rerank_score >= self.direct_answer_threshold
             )
 
             if not is_confident:

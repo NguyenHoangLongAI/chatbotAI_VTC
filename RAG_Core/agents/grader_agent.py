@@ -44,20 +44,18 @@ class GraderAgent:
             qualified_docs = []
             for doc in reranked_docs:
                 rerank_score = doc.get("rerank_score", 0)
-                similarity_score = doc.get("similarity_score", 0)
 
                 # Kiểm tra CẢ HAI điểm số
-                if (rerank_score >= self.reranking_threshold and
-                        similarity_score >= settings.SIMILARITY_THRESHOLD):
+                if (rerank_score >= self.reranking_threshold):
                     qualified_docs.append(doc)
                     logger.debug(
                         f"Doc {doc.get('document_id')}: "
-                        f"similarity={similarity_score:.3f}, rerank={rerank_score:.3f} ✓"
+                        f"rerank={rerank_score:.3f} ✓"
                     )
                 else:
                     logger.debug(
                         f"Doc {doc.get('document_id')}: "
-                        f"similarity={similarity_score:.3f}, rerank={rerank_score:.3f} ✗"
+                        f"rerank={rerank_score:.3f} ✗"
                     )
 
             # Bước 3: Quyết định

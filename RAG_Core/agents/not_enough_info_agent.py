@@ -8,28 +8,26 @@ class NotEnoughInfoAgent:
         self.name = "NOT_ENOUGH_INFO"
 
         # Prompt mới: yêu cầu LLM trả lời dựa trên kiến thức của nó
-        self.prompt_template = """Bạn là một chuyên viên tư vấn khách hàng người Việt Nam thân thiện và chuyên nghiệp - chuyên gia về chuyển đổi số và công nghệ.
+        self.prompt_template = """Bạn là nhân viên tư vấn khách hàng.
 
-TÌNH HUỐNG: Hệ thống không tìm thấy thông tin chính xác trong cơ sở dữ liệu để trả lời câu hỏi này.
+        TÌNH HUỐNG: Không có đủ dữ liệu trong hệ thống để trả lời chính xác.
 
-Câu hỏi người dùng: "{question}"
+        Câu hỏi: "{question}"
 
-NHIỆM VỤ CỦA BẠN:
-1. Bạn hãy trả lời với khách hàng "Dựa trên tổng hợp từ các nguồn thông tin, câu trả lời bạn có thể tham khảo như sau":
-2. NHƯNG dựa trên kiến thức chuyên môn của bạn về chuyển đổi số, hãy cung cấp:
-   - Câu trả lời hữu ích và mang tính tham khảo
-   - Chia sẻ kiến thức chung về chủ đề (nếu có)
-   - Gợi ý hướng tìm hiểu hoặc giải pháp thay thế
-3. Cuối cùng, đề xuất khách hàng liên hệ hotline để được tư vấn chính xác hơn
+        YÊU CẦU BẮT BUỘC:
+        - Trả lời NGẮN GỌN (tối đa 3–4 câu)
+        - KHÔNG phân tích dài, KHÔNG kể ví dụ
+        - Chỉ cung cấp thông tin mang tính tham khảo chung
+        - KHÔNG suy đoán chi tiết kỹ thuật
+        - Kết thúc bằng đề nghị liên hệ hotline
 
-YÊU CẦU:
-- Trả lời bằng tiếng Việt tự nhiên, thân thiện
-- Thể hiện sự chuyên nghiệp nhưng cũng khiêm tốn
-- Luôn làm rõ đây là ý kiến tham khảo
+        CẤU TRÚC TRẢ LỜI:
+        1. 1 câu mở đầu: “Dựa trên tổng hợp từ các nguồn thông tin, bạn có thể tham khảo như sau:”
+        2. 1–2 câu thông tin chung
+        3. 1 câu đề nghị liên hệ {support_phone}
 
-Số điện thoại hỗ trợ: {support_phone}
-
-Hãy trả lời:"""
+        Chỉ trả về nội dung trả lời, không giải thích gì thêm.
+        """
 
     def process(self, question: str, **kwargs) -> Dict[str, Any]:
         """Xử lý trường hợp không đủ thông tin - nhưng vẫn cố gắng hỗ trợ"""
@@ -39,7 +37,14 @@ Hãy trả lời:"""
                 support_phone=settings.SUPPORT_PHONE
             )
 
-            answer = llm_model.invoke(prompt)
+            answer = llm_model.invoke(
+                prompt,
+                temperature=0.2,  # ↓ sáng tạo
+                top_p=0.7,
+                max_tokens=120,  # ↓ token đầu ra
+                frequency_penalty=0.5,
+                presence_penalty=0.0
+            )
 
             return {
                 "status": "SUCCESS",

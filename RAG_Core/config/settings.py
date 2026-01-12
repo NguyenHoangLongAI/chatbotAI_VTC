@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     EMBEDDING_DIM: int = 768
 
     # ===== Search / RAG =====
-    SIMILARITY_THRESHOLD: float = 0.5
+    SIMILARITY_THRESHOLD: float = 0.2
     TOP_K: int = 20
     MAX_ITERATIONS: int = 5
 
@@ -53,7 +53,7 @@ class Settings(BaseSettings):
     FAQ_CONSISTENCY_THRESHOLD: float = 0.75  # Ngưỡng để được bonus
 
     # ===== Document Grader Settings =====
-    DOCUMENT_RERANK_THRESHOLD: float = 0.6  # Rerank threshold cho documents
+    DOCUMENT_RERANK_THRESHOLD: float = 0.7  # Rerank threshold cho documents
 
     # ===== Contact =====
     SUPPORT_PHONE: str = "Phòng vận hành 0904540490 - Phòng kinh doanh:0914616081"

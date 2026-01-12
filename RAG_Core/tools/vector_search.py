@@ -1,4 +1,4 @@
-# RAG_Core/tools/vector_search.py (COMPLETE VERSION)
+# RAG_Core/tools/vector_search.py (VIETNAMESE OPTIMIZED)
 
 from langchain_core.tools import tool
 from typing import List, Dict, Any
@@ -11,23 +11,31 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Load reranking model globally
+# ============================================================================
+# VIETNAMESE-OPTIMIZED RERANKER
+# ============================================================================
+
 try:
-    reranker_model = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-12-v2')
-    logger.info("Reranker model loaded successfully")
+    # Option 1: BGE Reranker v2 M3 (Best for Vietnamese)
+    reranker_model = CrossEncoder('BAAI/bge-reranker-v2-m3')
+    logger.info("✅ BGE Reranker v2 M3 (Vietnamese-optimized) loaded successfully")
+
+    # Option 2: If you want to try mE5
+    # reranker_model = CrossEncoder('intfloat/multilingual-e5-large')
+
 except Exception as e:
     logger.error(f"Failed to load reranker model: {e}")
     reranker_model = None
 
 
 # ============================================================================
-# FAQ RERANKING (OPTIMIZED)
+# FAQ RERANKING (OPTIMIZED FOR VIETNAMESE)
 # ============================================================================
 
 @tool
 def rerank_faq(query: str, faq_results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
-    Rerank FAQ results using cross-encoder với chiến lược tối ưu.
+    Rerank FAQ với model hiểu Tiếng Việt tốt hơn
     """
     try:
         if not faq_results:
@@ -53,7 +61,7 @@ def rerank_faq(query: str, faq_results: List[Dict[str, Any]]) -> List[Dict[str, 
             pairs.append([query, question])
             faq_variants.append(('question_only', idx))
 
-            # Variant 2: Query vs Question+Answer
+            # Variant 2: Query vs Question+Answer (quan trọng cho context Tiếng Việt)
             combined = f"{question} {answer}"
             pairs.append([query, combined])
             faq_variants.append(('question_answer', idx))
@@ -66,8 +74,8 @@ def rerank_faq(query: str, faq_results: List[Dict[str, Any]]) -> List[Dict[str, 
             logger.warning("No valid FAQ pairs created")
             return faq_results
 
-        # Predict scores
-        logger.info(f"Reranking {len(pairs)} FAQ variants ({len(faq_results)} FAQs)")
+        # Predict scores với BGE Reranker
+        logger.info(f"🔄 Reranking {len(pairs)} FAQ variants ({len(faq_results)} FAQs) với Vietnamese model")
         scores = reranker_model.predict(pairs)
 
         # Aggregate scores
@@ -111,7 +119,7 @@ def rerank_faq(query: str, faq_results: List[Dict[str, Any]]) -> List[Dict[str, 
         # Sort by final score
         reranked_faq.sort(key=lambda x: x.get('rerank_score', 0), reverse=True)
 
-        logger.info(f"Reranked {len(reranked_faq)} FAQs. Best: {reranked_faq[0].get('rerank_score', 0):.3f}")
+        logger.info(f"✅ Reranked {len(reranked_faq)} FAQs. Best score: {reranked_faq[0].get('rerank_score', 0):.3f}")
 
         return reranked_faq
 
@@ -121,13 +129,13 @@ def rerank_faq(query: str, faq_results: List[Dict[str, Any]]) -> List[Dict[str, 
 
 
 # ============================================================================
-# DOCUMENT RERANKING
+# DOCUMENT RERANKING (VIETNAMESE OPTIMIZED)
 # ============================================================================
 
 @tool
 def rerank_documents(query: str, documents: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
-    Rerank documents using cross-encoder model.
+    Rerank documents với model hiểu Tiếng Việt
     """
     try:
         if not documents:
@@ -144,7 +152,8 @@ def rerank_documents(query: str, documents: List[Dict[str, Any]]) -> List[Dict[s
             doc_text = doc.get('description', '') or doc.get('answer', '') or ''
             pairs.append([query, doc_text])
 
-        # Predict scores
+        # Predict scores với BGE Reranker
+        logger.info(f"🔄 Reranking {len(pairs)} documents với Vietnamese model")
         scores = reranker_model.predict(pairs)
 
         # Add rerank_score
@@ -157,16 +166,18 @@ def rerank_documents(query: str, documents: List[Dict[str, Any]]) -> List[Dict[s
         # Sort by rerank_score
         reranked_docs.sort(key=lambda x: x.get('rerank_score', 0), reverse=True)
 
-        logger.info(f"Reranked {len(reranked_docs)} documents")
+        logger.info(
+            f"✅ Reranked {len(reranked_docs)} documents. Best score: {reranked_docs[0].get('rerank_score', 0):.3f}")
+
         return reranked_docs
 
     except Exception as e:
-        logger.error(f"Error in reranking: {e}")
+        logger.error(f"Error in document reranking: {e}", exc_info=True)
         return documents
 
 
 # ============================================================================
-# SEARCH FUNCTIONS
+# SEARCH FUNCTIONS (Unchanged)
 # ============================================================================
 
 def pad_vector_to_dimension(vector: np.ndarray, target_dim: int) -> np.ndarray:
@@ -247,10 +258,6 @@ def search_faq(query: str, top_k: int = None) -> List[Dict[str, Any]]:
         return [{"error": f"Lỗi tìm kiếm FAQ: {str(e)}"}]
 
 
-# ============================================================================
-# DATABASE CONNECTION CHECK
-# ============================================================================
-
 @tool
 def check_database_connection() -> Dict[str, Any]:
     """Kiểm tra kết nối cơ sở dữ liệu"""
@@ -264,11 +271,9 @@ def check_database_connection() -> Dict[str, Any]:
 
         if is_connected:
             try:
-                # Check embedding model dimension
                 test_vector = embedding_model.encode_single("test")
                 embedding_dim = test_vector.shape[0]
 
-                # Check collection dimensions
                 doc_dim = milvus_client._get_collection_dimension(
                     settings.DOCUMENT_COLLECTION, "description_vector"
                 )
@@ -299,68 +304,3 @@ def check_database_connection() -> Dict[str, Any]:
             "connected": False,
             "message": f"Lỗi kiểm tra kết nối: {str(e)}"
         }
-
-
-# ============================================================================
-# DIAGNOSTIC TOOLS
-# ============================================================================
-
-@tool
-def diagnose_vector_dimensions() -> Dict[str, Any]:
-    """Công cụ chẩn đoán chi tiết về dimension mismatch"""
-    try:
-        diagnosis = {
-            "embedding_model": {},
-            "collections": {},
-            "recommendations": []
-        }
-
-        # Check embedding model
-        try:
-            test_vector = embedding_model.encode_single("test query")
-            diagnosis["embedding_model"] = {
-                "dimension": test_vector.shape[0],
-                "dtype": str(test_vector.dtype),
-                "sample_values": test_vector[:5].tolist()
-            }
-        except Exception as e:
-            diagnosis["embedding_model"]["error"] = str(e)
-
-        # Check collections
-        collections = [
-            (settings.DOCUMENT_COLLECTION, "description_vector"),
-            (settings.FAQ_COLLECTION, "question_vector")
-        ]
-
-        for collection_name, vector_field in collections:
-            try:
-                info = milvus_client.get_collection_info(collection_name)
-                dim = milvus_client._get_collection_dimension(collection_name, vector_field)
-
-                diagnosis["collections"][collection_name] = {
-                    "vector_field": vector_field,
-                    "expected_dimension": dim,
-                    "schema_info": info
-                }
-            except Exception as e:
-                diagnosis["collections"][collection_name] = {"error": str(e)}
-
-        # Generate recommendations
-        embedding_dim = diagnosis["embedding_model"].get("dimension", 0)
-
-        for collection_name, info in diagnosis["collections"].items():
-            expected_dim = info.get("expected_dimension", 0)
-
-            if embedding_dim > 0 and expected_dim > 0 and embedding_dim != expected_dim:
-                diagnosis["recommendations"].append(
-                    f"Collection '{collection_name}': embedding={embedding_dim}D, expected={expected_dim}D - "
-                    f"Currently using zero padding/truncation"
-                )
-
-        if not diagnosis["recommendations"]:
-            diagnosis["recommendations"].append("All dimensions match correctly!")
-
-        return diagnosis
-
-    except Exception as e:
-        return {"error": f"Lỗi chẩn đoán: {str(e)}"}
