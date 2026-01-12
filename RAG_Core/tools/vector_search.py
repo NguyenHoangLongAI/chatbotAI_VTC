@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 # Load reranking model globally
 try:
-    reranker_model = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
+    reranker_model = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-12-v2')
     logger.info("Reranker model loaded successfully")
 except Exception as e:
     logger.error(f"Failed to load reranker model: {e}")
