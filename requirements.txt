@@ -1,32 +1,46 @@
+# ===== API =====
 fastapi==0.110.0
 uvicorn[standard]==0.29.0
-pydantic==2.6.4
+pydantic==2.8.2
+pydantic-settings==2.3.0
 python-multipart==0.0.6
-requests==2.31.0
 
+requests==2.32.3
+
+# ===== TORCH =====
 --extra-index-url https://download.pytorch.org/whl/cu121
 torch==2.2.2+cu121
 torchvision==0.17.2+cu121
 
-transformers==4.39.3
+# ===== TRANSFORMERS =====
+transformers==4.44.2
 sentence-transformers==2.6.0
 accelerate==0.28.0
 
+# ===== LANGCHAIN =====
 langchain-core==0.2.23
 langchain-community==0.2.10
 langchain-ollama==0.1.0
 langgraph==0.0.50
 
+# ===== VECTOR DB =====
 pymilvus==2.3.4
+
+# ===== DOCLING (SYNCED) =====
+docling==2.17.0
+docling-core==2.21.0
+docling-core[chunking]==2.21.0
+
+# ===== OCR / DOC =====
+easyocr==1.7.0
 opencv-python==4.8.1.78
-Pillow==10.1.0
+Pillow==10.4.0
 PyPDF2==3.0.1
 pdf2image==1.16.3
-pytesseract==0.3.10
-python-docx==1.1.0
-openpyxl==3.1.2
+python-docx==1.1.2
+openpyxl==3.1.5
 markdown==3.5.1
-
+pytesseract
+# ===== DATA =====
 numpy==1.26.4
 pandas==2.1.4
-pydantic-settings==2.2.1

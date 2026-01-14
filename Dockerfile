@@ -1,4 +1,4 @@
-# CUDA runtime + cuDNN (Ubuntu 22.04)
+# ===== BASE IMAGE: Ubuntu 22.04 with Python 3.11 + CUDA =====
 FROM nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -6,28 +6,52 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-# Python + system deps for OCR/PDF/CV
+# ===== INSTALL PYTHON 3.11 FROM DEADSNAKES PPA =====
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 python3-venv python3-pip \
+    software-properties-common \
+    && add-apt-repository ppa:deadsnakes/ppa -y \
+    && apt-get update \
+    && rm -rf /var/lib/apt/lists/*
+
+# ===== SYSTEM DEPENDENCIES =====
+# - Python 3.11 + tesseract + poppler + OpenCV + ffmpeg
+# - Additional dependencies for Docling
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 python3.11-venv python3.11-dev \
+    python3-pip \
     tesseract-ocr tesseract-ocr-vie \
     poppler-utils \
     libgl1 libglib2.0-0 libsm6 libxext6 libxrender1 \
     ffmpeg wget curl ca-certificates git dos2unix \
+    # Docling dependencies
+    libgomp1 \
+    libmagic1 \
+    libpoppler-cpp-dev \
   && rm -rf /var/lib/apt/lists/*
 
-# Ensure python/pip shims
-RUN update-alternatives --install /usr/bin/python python /usr/bin/python3 1 && \
-    update-alternatives --install /usr/bin/pip pip /usr/bin/pip3 1
+# Configure Python 3.11 as default
+RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1 \
+    && update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1
+
+# Install pip for Python 3.11
+RUN curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11 \
+    && update-alternatives --install /usr/bin/pip pip /usr/local/bin/pip3.11 1
 
 WORKDIR /app
 
-# Install Python deps (clean requirements file first)
+# ===== INSTALL PYTHON DEPENDENCIES =====
 COPY requirements.txt /app/requirements.txt
+
+# Clean requirements file and install
 RUN dos2unix /app/requirements.txt || true && \
     sed -i '1s/^\xEF\xBB\xBF//' /app/requirements.txt && \
     grep -q "^# -*- coding: utf-8 -*-" /app/requirements.txt || sed -i '1i # -*- coding: utf-8 -*-' /app/requirements.txt && \
     python -m pip install --upgrade pip setuptools wheel && \
     python -m pip install -r /app/requirements.txt
+
+# ===== DOWNLOAD EASYOCR MODELS (for Docling) =====
+# Pre-download Vietnamese and English models to avoid runtime download
+RUN python -c "import easyocr; reader = easyocr.Reader(['vi', 'en'], gpu=True, download_enabled=True)"
 
 # Copy project
 COPY . /app
