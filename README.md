@@ -299,7 +299,7 @@ client.send_message_non_streaming("Làm sao sử dụng AI?")
 client.interactive_mode()
 ```
 
-## ⚙️ Configuration
+## Configuration
 
 ### Agent Behavior Tuning
 
@@ -486,7 +486,7 @@ await asyncio.sleep(0.001)  # Reduce for faster streaming
 - Implement rate limiting on API endpoints
 - Use HTTPS in production deployment
 
-## 🚢 Production Deployment
+## Production Deployment
 
 ### Resource Requirements
 - **CPU**: 8+ cores
@@ -525,7 +525,7 @@ Full API documentation available at:
 - Document API: http://localhost:8000/docs
 - RAG API: http://localhost:8501/docs
 
-## 🎓 Key Features Summary
+## Key Features Summary
 
 **Smart Document Processing**
 - Docling integration for high-quality conversion
