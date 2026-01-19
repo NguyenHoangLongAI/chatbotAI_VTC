@@ -1,179 +1,304 @@
-# RAG_Core/tools/vector_search.py (VIETNAMESE OPTIMIZED)
+# RAG_Core/tools/vector_search.py (COHERE RERANKER - STANDALONE)
 
 from langchain_core.tools import tool
 from typing import List, Dict, Any
 import numpy as np
 from models.embedding_model import embedding_model
 from database.milvus_client import milvus_client
-from sentence_transformers import CrossEncoder
 from config.settings import settings
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
 # ============================================================================
-# VIETNAMESE-OPTIMIZED RERANKER
+# COHERE RERANKER SETUP (STANDALONE - AUTO IMPORT)
 # ============================================================================
+
+cohere_client = None
+COHERE_RERANK_MODEL = 'rerank-multilingual-v3.0'
 
 try:
-    # Option 1: BGE Reranker v2 M3 (Best for Vietnamese)
-    reranker_model = CrossEncoder('BAAI/bge-reranker-v2-m3')
-    logger.info("✅ BGE Reranker v2 M3 (Vietnamese-optimized) loaded successfully")
+    import cohere
 
-    # Option 2: If you want to try mE5
-    # reranker_model = CrossEncoder('intfloat/multilingual-e5-large')
+    # Tự động lấy API key từ nhiều nguồn (theo thứ tự ưu tiên)
+    cohere_api_key = None
+
+    # 1. Thử lấy từ settings (nếu có)
+    if hasattr(settings, 'COHERE_API_KEY'):
+        cohere_api_key = settings.COHERE_API_KEY
+        logger.info("📍 Found COHERE_API_KEY in settings")
+
+    # 2. Thử lấy từ environment variable
+    if not cohere_api_key:
+        cohere_api_key = os.getenv('COHERE_API_KEY')
+        if cohere_api_key:
+            logger.info("📍 Found COHERE_API_KEY in environment")
+
+    # 3. Hardcode key (TEMPORARY - chỉ cho dev/testing)
+    if not cohere_api_key:
+        cohere_api_key = "NoQ9Jjvz5r1JeRWZG8L9dnl8BxYljmnOdiUfTnfk"
+        logger.warning("⚠️ Using hardcoded COHERE_API_KEY (not recommended for production)")
+
+    if not cohere_api_key or cohere_api_key == "your-api-key-here":
+        raise ValueError("COHERE_API_KEY not configured")
+
+    # Initialize Cohere client
+    cohere_client = cohere.Client(cohere_api_key)
+
+    # Lấy model từ settings hoặc dùng default
+    if hasattr(settings, 'COHERE_RERANK_MODEL'):
+        COHERE_RERANK_MODEL = settings.COHERE_RERANK_MODEL
+
+    logger.info(f"✅ Cohere Reranker initialized with model: {COHERE_RERANK_MODEL}")
+
+    # Test connection
+    try:
+        test_response = cohere_client.rerank(
+            query="test",
+            documents=["test document"],
+            model=COHERE_RERANK_MODEL,
+            top_n=1
+        )
+        logger.info("✅ Cohere API connection test successful")
+    except Exception as test_error:
+        logger.warning(f"⚠️ Cohere API test failed: {test_error}")
+
+except ImportError:
+    logger.error("❌ Cohere library not installed. Run: pip install cohere")
+    cohere_client = None
 
 except Exception as e:
-    logger.error(f"Failed to load reranker model: {e}")
-    reranker_model = None
+    logger.error(f"❌ Failed to initialize Cohere client: {e}", exc_info=True)
+    cohere_client = None
 
 
 # ============================================================================
-# FAQ RERANKING (OPTIMIZED FOR VIETNAMESE)
+# FAQ RERANKING (COHERE API)
 # ============================================================================
 
 @tool
 def rerank_faq(query: str, faq_results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
-    Rerank FAQ với model hiểu Tiếng Việt tốt hơn
+    Rerank FAQ sử dụng Cohere Rerank API (tối ưu cho Tiếng Việt)
     """
     try:
         if not faq_results:
             logger.warning("No FAQ to rerank")
             return []
 
-        if reranker_model is None:
-            logger.warning("Reranker model not available, returning original FAQ")
+        if cohere_client is None:
+            logger.warning("Cohere client not available, returning original FAQ")
             return faq_results
 
-        # Prepare pairs với nhiều variants
-        pairs = []
-        faq_variants = []
-
-        for idx, faq in enumerate(faq_results):
+        # Prepare documents cho Cohere
+        # Strategy: Combine question + answer để Cohere hiểu context đầy đủ
+        documents = []
+        for faq in faq_results:
             question = faq.get('question', '').strip()
             answer = faq.get('answer', '').strip()
 
-            if not question:
-                continue
+            # Combine với format rõ ràng
+            combined = f"Câu hỏi: {question}\nTrả lời: {answer}"
+            documents.append(combined)
 
-            # Variant 1: Query vs Question only
-            pairs.append([query, question])
-            faq_variants.append(('question_only', idx))
-
-            # Variant 2: Query vs Question+Answer (quan trọng cho context Tiếng Việt)
-            combined = f"{question} {answer}"
-            pairs.append([query, combined])
-            faq_variants.append(('question_answer', idx))
-
-            # Variant 3: Query vs Answer only
-            pairs.append([query, answer])
-            faq_variants.append(('answer_only', idx))
-
-        if not pairs:
-            logger.warning("No valid FAQ pairs created")
+        if not documents:
+            logger.warning("No valid FAQ documents created")
             return faq_results
 
-        # Predict scores với BGE Reranker
-        logger.info(f"🔄 Reranking {len(pairs)} FAQ variants ({len(faq_results)} FAQs) với Vietnamese model")
-        scores = reranker_model.predict(pairs)
+        # Call Cohere Rerank API
+        logger.info(f"🔄 Reranking {len(documents)} FAQs với Cohere API")
 
-        # Aggregate scores
-        faq_scores = {}
-        for i, (variant_type, faq_idx) in enumerate(faq_variants):
-            if faq_idx not in faq_scores:
-                faq_scores[faq_idx] = {}
-            faq_scores[faq_idx][variant_type] = float(scores[i])
+        rerank_response = cohere_client.rerank(
+            query=query,
+            documents=documents,
+            model=COHERE_RERANK_MODEL,
+            top_n=len(documents),  # Return all với scores
+            return_documents=False  # Không cần trả về documents (ta đã có rồi)
+        )
 
-        # Calculate final scores với weighted average
-        weights = {
-            'question_only': getattr(settings, 'FAQ_QUESTION_WEIGHT', 0.5),
-            'question_answer': getattr(settings, 'FAQ_QA_WEIGHT', 0.3),
-            'answer_only': getattr(settings, 'FAQ_ANSWER_WEIGHT', 0.2)
-        }
-
+        # Map scores trở lại FAQs
         reranked_faq = []
-        for faq_idx, faq in enumerate(faq_results):
-            if faq_idx not in faq_scores:
-                continue
+        for result in rerank_response.results:
+            idx = result.index
+            score = result.relevance_score
 
-            variant_scores = faq_scores[faq_idx]
-
-            final_score = sum(
-                variant_scores.get(variant, 0) * weight
-                for variant, weight in weights.items()
-            )
-
-            # Bonus for consistent high scores
-            consistency_threshold = getattr(settings, 'FAQ_CONSISTENCY_THRESHOLD', 0.6)
-            if all(variant_scores.get(v, 0) > consistency_threshold for v in weights.keys()):
-                bonus = getattr(settings, 'FAQ_CONSISTENCY_BONUS', 1.1)
-                final_score *= bonus
-                logger.debug(f"FAQ {faq_idx} received consistency bonus")
-
-            faq_copy = faq.copy()
-            faq_copy['rerank_score'] = final_score
-            faq_copy['rerank_details'] = variant_scores
+            faq_copy = faq_results[idx].copy()
+            faq_copy['rerank_score'] = float(score)
+            faq_copy['rerank_source'] = 'cohere'
             reranked_faq.append(faq_copy)
 
-        # Sort by final score
+        # Sort by rerank_score (Cohere đã sort rồi nhưng để chắc chắn)
         reranked_faq.sort(key=lambda x: x.get('rerank_score', 0), reverse=True)
 
-        logger.info(f"✅ Reranked {len(reranked_faq)} FAQs. Best score: {reranked_faq[0].get('rerank_score', 0):.3f}")
+        logger.info(
+            f"✅ Reranked {len(reranked_faq)} FAQs. "
+            f"Best score: {reranked_faq[0].get('rerank_score', 0):.3f}"
+        )
 
         return reranked_faq
 
     except Exception as e:
-        logger.error(f"Error in FAQ reranking: {e}", exc_info=True)
-        return sorted(faq_results, key=lambda x: x.get('similarity_score', 0), reverse=True)
+        logger.error(f"Error in Cohere FAQ reranking: {e}", exc_info=True)
+        # Fallback to original similarity scores
+        return sorted(
+            faq_results,
+            key=lambda x: x.get('similarity_score', 0),
+            reverse=True
+        )
 
 
 # ============================================================================
-# DOCUMENT RERANKING (VIETNAMESE OPTIMIZED)
+# DOCUMENT RERANKING (COHERE API)
 # ============================================================================
 
 @tool
 def rerank_documents(query: str, documents: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
-    Rerank documents với model hiểu Tiếng Việt
+    Rerank documents sử dụng Cohere Rerank API
     """
     try:
         if not documents:
             logger.warning("No documents to rerank")
             return []
 
-        if reranker_model is None:
-            logger.warning("Reranker model not available, returning original documents")
+        if cohere_client is None:
+            logger.warning("Cohere client not available, returning original documents")
             return documents
 
-        # Prepare pairs
-        pairs = []
+        # Prepare document texts
+        doc_texts = []
         for doc in documents:
-            doc_text = doc.get('description', '') or doc.get('answer', '') or ''
-            pairs.append([query, doc_text])
+            doc_text = doc.get('description', '') or doc.get('answer', '') or doc.get('content', '')
+            doc_texts.append(doc_text)
 
-        # Predict scores với BGE Reranker
-        logger.info(f"🔄 Reranking {len(pairs)} documents với Vietnamese model")
-        scores = reranker_model.predict(pairs)
+        if not doc_texts:
+            logger.warning("No valid document texts found")
+            return documents
 
-        # Add rerank_score
+        # Call Cohere Rerank API
+        logger.info(f"🔄 Reranking {len(doc_texts)} documents với Cohere API")
+
+        rerank_response = cohere_client.rerank(
+            query=query,
+            documents=doc_texts,
+            model=COHERE_RERANK_MODEL,
+            top_n=len(doc_texts),
+            return_documents=False
+        )
+
+        # Map scores trở lại documents
         reranked_docs = []
-        for i, doc in enumerate(documents):
-            doc_copy = doc.copy()
-            doc_copy['rerank_score'] = float(scores[i])
+        for result in rerank_response.results:
+            idx = result.index
+            score = result.relevance_score
+
+            doc_copy = documents[idx].copy()
+            doc_copy['rerank_score'] = float(score)
+            doc_copy['rerank_source'] = 'cohere'
             reranked_docs.append(doc_copy)
 
         # Sort by rerank_score
         reranked_docs.sort(key=lambda x: x.get('rerank_score', 0), reverse=True)
 
         logger.info(
-            f"✅ Reranked {len(reranked_docs)} documents. Best score: {reranked_docs[0].get('rerank_score', 0):.3f}")
+            f"✅ Reranked {len(reranked_docs)} documents. "
+            f"Best score: {reranked_docs[0].get('rerank_score', 0):.3f}"
+        )
 
         return reranked_docs
 
     except Exception as e:
-        logger.error(f"Error in document reranking: {e}", exc_info=True)
+        logger.error(f"Error in Cohere document reranking: {e}", exc_info=True)
         return documents
+
+
+# ============================================================================
+# ADVANCED: HYBRID RERANKING (Optional)
+# ============================================================================
+
+@tool
+def hybrid_rerank_faq(
+        query: str,
+        faq_results: List[Dict[str, Any]],
+        use_variants: bool = True
+) -> List[Dict[str, Any]]:
+    """
+    Rerank FAQ với multiple strategies để tối ưu kết quả
+
+    Args:
+        query: User query
+        faq_results: FAQ results from vector search
+        use_variants: Nếu True, sẽ test nhiều variants của query
+    """
+    try:
+        if not faq_results or cohere_client is None:
+            return rerank_faq(query, faq_results)
+
+        if not use_variants:
+            return rerank_faq(query, faq_results)
+
+        # Strategy: Rerank với multiple query variants để có kết quả tốt nhất
+        documents = []
+        for faq in faq_results:
+            question = faq.get('question', '').strip()
+            answer = faq.get('answer', '').strip()
+            combined = f"Câu hỏi: {question}\nTrả lời: {answer}"
+            documents.append(combined)
+
+        # Variant 1: Original query
+        logger.info("🔄 Reranking với original query")
+        rerank1 = cohere_client.rerank(
+            query=query,
+            documents=documents,
+            model=COHERE_RERANK_MODEL,
+            top_n=len(documents),
+            return_documents=False
+        )
+
+        # Variant 2: Query as a question (nếu chưa phải câu hỏi)
+        query_as_question = query if query.strip().endswith('?') else f"{query}?"
+        logger.info("🔄 Reranking với question format")
+        rerank2 = cohere_client.rerank(
+            query=query_as_question,
+            documents=documents,
+            model=COHERE_RERANK_MODEL,
+            top_n=len(documents),
+            return_documents=False
+        )
+
+        # Combine scores với weighted average
+        combined_scores = {}
+        weights = [0.6, 0.4]  # Ưu tiên original query hơn
+
+        for result in rerank1.results:
+            idx = result.index
+            combined_scores[idx] = result.relevance_score * weights[0]
+
+        for result in rerank2.results:
+            idx = result.index
+            combined_scores[idx] = combined_scores.get(idx, 0) + result.relevance_score * weights[1]
+
+        # Create final ranked list
+        reranked_faq = []
+        for idx, score in combined_scores.items():
+            faq_copy = faq_results[idx].copy()
+            faq_copy['rerank_score'] = float(score)
+            faq_copy['rerank_source'] = 'cohere_hybrid'
+            reranked_faq.append(faq_copy)
+
+        reranked_faq.sort(key=lambda x: x.get('rerank_score', 0), reverse=True)
+
+        logger.info(
+            f"✅ Hybrid reranked {len(reranked_faq)} FAQs. "
+            f"Best score: {reranked_faq[0].get('rerank_score', 0):.3f}"
+        )
+
+        return reranked_faq
+
+    except Exception as e:
+        logger.error(f"Error in hybrid reranking: {e}", exc_info=True)
+        return rerank_faq(query, faq_results)
 
 
 # ============================================================================
@@ -296,6 +421,12 @@ def check_database_connection() -> Dict[str, Any]:
 
             except Exception as dim_error:
                 result["dimension_check_error"] = str(dim_error)
+
+        # Add Cohere status
+        result["cohere_reranker"] = {
+            "available": cohere_client is not None,
+            "model": COHERE_RERANK_MODEL if cohere_client else None
+        }
 
         return result
 

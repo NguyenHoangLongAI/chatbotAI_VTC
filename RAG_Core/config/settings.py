@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     EMBEDDING_DIM: int = 768
 
     # ===== Search / RAG =====
-    SIMILARITY_THRESHOLD: float = 0.2
+    SIMILARITY_THRESHOLD: float = 0.5
     TOP_K: int = 20
     MAX_ITERATIONS: int = 5
 
