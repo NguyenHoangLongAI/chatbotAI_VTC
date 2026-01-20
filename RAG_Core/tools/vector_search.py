@@ -37,7 +37,7 @@ try:
 
     # 3. Hardcode key (TEMPORARY - chỉ cho dev/testing)
     if not cohere_api_key:
-        cohere_api_key = ""
+        cohere_api_key = "NoQ9Jjvz5r1JeRWZG8L9dnl8BxYljmnOdiUfTnfk"
         logger.warning("⚠️ Using hardcoded COHERE_API_KEY (not recommended for production)")
 
     if not cohere_api_key or cohere_api_key == "your-api-key-here":
@@ -81,20 +81,35 @@ except Exception as e:
 def rerank_faq(query: str, faq_results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
     Rerank FAQ sử dụng Cohere Rerank API (tối ưu cho Tiếng Việt)
+
+    UPDATED: Now receives CONTEXTUALIZED question for better accuracy
+
+    Args:
+        query: CONTEXTUALIZED question (if follow-up) or original (if standalone)
+        faq_results: List of FAQ candidates from vector search
+
+    Returns:
+        List of FAQs sorted by rerank_score (descending)
     """
     try:
+        logger.info("-" * 50)
+        logger.info("🔄 COHERE RERANKER")
+        logger.info("-" * 50)
+        logger.info(f"📝 Query: '{query[:100]}'")
+        logger.info(f"   Length: {len(query)} chars")
+        logger.info(f"   FAQs to rerank: {len(faq_results)}")
+
         if not faq_results:
-            logger.warning("No FAQ to rerank")
+            logger.warning("⚠️  No FAQ to rerank")
             return []
 
         if cohere_client is None:
-            logger.warning("Cohere client not available, returning original FAQ")
+            logger.warning("⚠️  Cohere client not available, returning original FAQs")
             return faq_results
 
         # Prepare documents cho Cohere
-        # Strategy: Combine question + answer để Cohere hiểu context đầy đủ
         documents = []
-        for faq in faq_results:
+        for i, faq in enumerate(faq_results):
             question = faq.get('question', '').strip()
             answer = faq.get('answer', '').strip()
 
@@ -102,20 +117,30 @@ def rerank_faq(query: str, faq_results: List[Dict[str, Any]]) -> List[Dict[str, 
             combined = f"Câu hỏi: {question}\nTrả lời: {answer}"
             documents.append(combined)
 
+            # Log first 2 candidates
+            if i < 2:
+                logger.info(f"   Candidate {i + 1}: '{question[:60]}...'")
+
         if not documents:
-            logger.warning("No valid FAQ documents created")
+            logger.warning("⚠️  No valid FAQ documents created")
             return faq_results
 
         # Call Cohere Rerank API
-        logger.info(f"🔄 Reranking {len(documents)} FAQs với Cohere API")
+        logger.info(f"🌐 Calling Cohere API (model: {COHERE_RERANK_MODEL})")
+
+        import time
+        start_time = time.time()
 
         rerank_response = cohere_client.rerank(
-            query=query,
+            query=query,  # ← ✅ CONTEXTUALIZED query
             documents=documents,
             model=COHERE_RERANK_MODEL,
-            top_n=len(documents),  # Return all với scores
-            return_documents=False  # Không cần trả về documents (ta đã có rồi)
+            top_n=len(documents),
+            return_documents=False
         )
+
+        api_time = time.time() - start_time
+        logger.info(f"⏱️  Cohere API completed in {api_time:.3f}s")
 
         # Map scores trở lại FAQs
         reranked_faq = []
@@ -128,18 +153,28 @@ def rerank_faq(query: str, faq_results: List[Dict[str, Any]]) -> List[Dict[str, 
             faq_copy['rerank_source'] = 'cohere'
             reranked_faq.append(faq_copy)
 
-        # Sort by rerank_score (Cohere đã sort rồi nhưng để chắc chắn)
+        # Sort by rerank_score
         reranked_faq.sort(key=lambda x: x.get('rerank_score', 0), reverse=True)
 
+        # Log top 3 results
+        logger.info(f"\n📊 RERANK RESULTS (Top 3):")
+        for i, faq in enumerate(reranked_faq[:3], 1):
+            logger.info(
+                f"   {i}. Score: {faq.get('rerank_score', 0):.3f} | "
+                f"Q: '{faq.get('question', '')[:60]}...'"
+            )
+
         logger.info(
-            f"✅ Reranked {len(reranked_faq)} FAQs. "
-            f"Best score: {reranked_faq[0].get('rerank_score', 0):.3f}"
+            f"\n✅ Reranked {len(reranked_faq)} FAQs successfully\n"
+            f"   Best score: {reranked_faq[0].get('rerank_score', 0):.3f}"
         )
+        logger.info("-" * 50 + "\n")
 
         return reranked_faq
 
     except Exception as e:
-        logger.error(f"Error in Cohere FAQ reranking: {e}", exc_info=True)
+        logger.error(f"❌ Error in Cohere FAQ reranking: {e}", exc_info=True)
+        logger.info("↩️  Falling back to similarity scores")
         # Fallback to original similarity scores
         return sorted(
             faq_results,

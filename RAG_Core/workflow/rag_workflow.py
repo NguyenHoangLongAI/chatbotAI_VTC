@@ -1,4 +1,4 @@
-# RAG_Core/workflow/rag_workflow_true_streaming.py
+# RAG_Core/workflow/rag_workflow.py - FIXED CONSISTENT RESULTS
 
 from typing import Dict, Any, List, AsyncIterator
 from langgraph.graph import StateGraph
@@ -54,7 +54,7 @@ class RAGWorkflow:
         self.generator_agent = GeneratorAgent()
         self.reporter_agent = ReporterAgent()
 
-        # NEW: Streaming-enabled agents
+        # Streaming-enabled agents
         self.chatter_agent = StreamingChatterAgent()
         self.other_agent = StreamingOtherAgent()
         self.not_enough_info_agent = StreamingNotEnoughInfoAgent()
@@ -109,39 +109,89 @@ class RAGWorkflow:
         return workflow.compile()
 
     def _parallel_execution_node(self, state: ChatbotState) -> ChatbotState:
-        """Chạy song song: Supervisor + FAQ + RETRIEVER"""
+        """
+        ✅ FIXED: Chạy song song với ĐÚNG parameters
+
+        Supervisor → Context → FAQ + RETRIEVER (với context)
+        """
         question = state["question"]
         history = state.get("history", [])
 
         logger.info("🚀 Starting parallel execution")
 
-        future_supervisor = self.executor.submit(self._safe_execute_supervisor, question, history)
-        future_faq = self.executor.submit(self._safe_execute_faq, question, history)
-        future_retriever = self.executor.submit(self._safe_execute_retriever, question)
-
+        # ========================================
+        # STEP 1: Run Supervisor FIRST (sequential)
+        # ========================================
         supervisor_result = self._get_result_with_timeout(
-            future_supervisor, timeout=20,
-            default={"agent": "FAQ", "contextualized_question": question, "is_followup": False},
+            self.executor.submit(self._safe_execute_supervisor, question, history),
+            timeout=20,
+            default={
+                "agent": "FAQ",
+                "contextualized_question": question,
+                "is_followup": False,
+                "context_summary": ""
+            },
             name="Supervisor"
         )
+
+        # Extract context từ supervisor
+        context_summary = supervisor_result.get("context_summary", "")
+        is_followup = supervisor_result.get("is_followup", False)
+        contextualized_question = supervisor_result.get("contextualized_question", question)
+
+        logger.info(
+            f"📋 Supervisor: agent={supervisor_result.get('agent')}, "
+            f"follow-up={is_followup}, has_context={bool(context_summary)}"
+        )
+
+        # ========================================
+        # STEP 2: Run FAQ + RETRIEVER in parallel (WITH context)
+        # ========================================
+        future_faq = self.executor.submit(
+            self._safe_execute_faq,
+            contextualized_question,
+            history
+        )
+
+        # ✅ FIX: Pass context_summary và is_followup
+        future_retriever = self.executor.submit(
+            self._safe_execute_retriever,
+            question,  # Original question
+            context_summary,  # ✅ Context summary
+            is_followup  # ✅ Follow-up flag
+        )
+
         faq_result = self._get_result_with_timeout(
-            future_faq, timeout=10,
+            future_faq,
+            timeout=10,
             default={"status": "ERROR", "answer": "", "references": []},
             name="FAQ"
         )
+
         retriever_result = self._get_result_with_timeout(
-            future_retriever, timeout=10,
+            future_retriever,
+            timeout=10,
             default={"status": "ERROR", "documents": []},
             name="RETRIEVER"
         )
 
+        # ========================================
+        # STEP 3: Update state
+        # ========================================
         state["supervisor_classification"] = supervisor_result
-        state["question"] = supervisor_result.get("contextualized_question", question)
-        state["is_followup"] = supervisor_result.get("is_followup", False)
-        state["context_summary"] = supervisor_result.get("context_summary", "")
+        state["question"] = contextualized_question
+        state["is_followup"] = is_followup
+        state["context_summary"] = context_summary
         state["faq_result"] = faq_result
         state["retriever_result"] = retriever_result
         state["parallel_mode"] = True
+
+        logger.info(
+            f"✅ Parallel execution completed:\n"
+            f"  - FAQ: {faq_result.get('status')}\n"
+            f"  - RETRIEVER: {retriever_result.get('status')}, "
+            f"docs={len(retriever_result.get('documents', []))}"
+        )
 
         return state
 
@@ -186,12 +236,40 @@ class RAGWorkflow:
             logger.error(f"FAQ error: {e}")
             return {"status": "ERROR", "answer": "", "references": [], "next_agent": "RETRIEVER"}
 
-    def _safe_execute_retriever(self, question: str) -> Dict[str, Any]:
+    def _safe_execute_retriever(
+            self,
+            question: str,
+            context_summary: str = "",  # ✅ FIXED: Accept context
+            is_followup: bool = False  # ✅ FIXED: Accept follow-up flag
+    ) -> Dict[str, Any]:
+        """
+        ✅ FIXED: Execute retriever với context summary support
+        """
         try:
-            return self.retriever_agent.process(question)
+            # Kiểm tra xem retriever_agent.process có nhận context không
+            # Nếu không hỗ trợ, chỉ truyền question
+            import inspect
+            sig = inspect.signature(self.retriever_agent.process)
+
+            if 'context_summary' in sig.parameters:
+                # Retriever hỗ trợ context
+                return self.retriever_agent.process(
+                    question=question,
+                    context_summary=context_summary,
+                    is_followup=is_followup
+                )
+            else:
+                # Retriever chưa hỗ trợ context - chỉ truyền question
+                logger.debug("Retriever doesn't support context, using question only")
+                return self.retriever_agent.process(question=question)
+
         except Exception as e:
             logger.error(f"RETRIEVER error: {e}")
-            return {"status": "ERROR", "documents": [], "next_agent": "NOT_ENOUGH_INFO"}
+            return {
+                "status": "ERROR",
+                "documents": [],
+                "next_agent": "NOT_ENOUGH_INFO"
+            }
 
     def _decision_router_node(self, state: ChatbotState) -> ChatbotState:
         """Router dựa trên kết quả parallel"""
@@ -224,15 +302,52 @@ class RAGWorkflow:
         return state
 
     def _grader_node(self, state: ChatbotState) -> ChatbotState:
+        """
+        ✅ FIXED: Grader với context summary
+        """
         try:
-            result = self.grader_agent.process(state["question"], state.get("documents", []))
+            question = state["question"]
+            documents = state.get("documents", [])
+            context_summary = state.get("context_summary", "")
+            is_followup = state.get("is_followup", False)
+
+            logger.info(
+                f"📊 Grader: Processing {len(documents)} documents "
+                f"(follow-up={is_followup})"
+            )
+
+            # Kiểm tra xem grader có hỗ trợ context không
+            import inspect
+            sig = inspect.signature(self.grader_agent.process)
+
+            if 'context_summary' in sig.parameters:
+                result = self.grader_agent.process(
+                    question=question,
+                    documents=documents,
+                    context_summary=context_summary,
+                    is_followup=is_followup
+                )
+            else:
+                # Grader chưa hỗ trợ context
+                result = self.grader_agent.process(
+                    question=question,
+                    documents=documents
+                )
+
             state["status"] = result["status"]
             state["qualified_documents"] = result.get("qualified_documents", [])
             state["references"] = result.get("references", [])
             state["current_agent"] = result.get("next_agent", "GENERATOR")
+
+            logger.info(
+                f"📊 Grader result: {result['status']}, "
+                f"qualified={len(result.get('qualified_documents', []))}"
+            )
+
             return state
+
         except Exception as e:
-            logger.error(f"Grader error: {e}")
+            logger.error(f"❌ Grader node error: {e}", exc_info=True)
             state["current_agent"] = "NOT_ENOUGH_INFO"
             return state
 
@@ -344,12 +459,12 @@ class RAGWorkflow:
             history: List[Dict[str, str]] = None
     ) -> Dict[str, Any]:
         """
-        ✅ TRUE STREAMING cho tất cả agents
+        ✅ FIXED: TRUE STREAMING với CONSISTENT LOGIC
         """
         try:
             logger.info(f"🚀 Streaming workflow start: {question[:100]}")
 
-            # Run parallel execution
+            # ✅ FIX: Sử dụng CÙNG logic với run() - qua workflow graph
             initial_state = self._create_initial_state(question, history)
             state = self._parallel_execution_node(initial_state)
             state = self._decision_router_node(state)
@@ -357,14 +472,11 @@ class RAGWorkflow:
             current_agent = state.get("current_agent")
             logger.info(f"📍 Routed to: {current_agent}")
 
-            # ================================================================
-            # FAQ - Direct answer (fake stream vì answer đã sẵn)
-            # ================================================================
+            # FAQ - Direct answer
             if current_agent == "end":
                 answer_text = state.get("answer", "")
 
                 async def faq_generator():
-                    # FAQ answers are pre-computed, so we fake stream
                     words = answer_text.split()
                     for word in words:
                         yield word + " "
@@ -376,9 +488,7 @@ class RAGWorkflow:
                     "status": state.get("status", "SUCCESS")
                 }
 
-            # ================================================================
-            # GRADER → GENERATOR (TRUE STREAMING)
-            # ================================================================
+            # GRADER → GENERATOR or NOT_ENOUGH_INFO
             elif current_agent == "GRADER":
                 state = self._grader_node(state)
 
@@ -397,9 +507,7 @@ class RAGWorkflow:
                         "status": "STREAMING"
                     }
                 else:
-                    # NOT_ENOUGH_INFO - TRUE STREAMING
                     logger.info("✅ TRUE STREAMING: NOT_ENOUGH_INFO")
-
                     from config.settings import settings
 
                     return {
@@ -411,12 +519,9 @@ class RAGWorkflow:
                         "status": "STREAMING"
                     }
 
-            # ================================================================
-            # CHATTER - TRUE STREAMING
-            # ================================================================
+            # CHATTER
             elif current_agent == "CHATTER":
                 logger.info("✅ TRUE STREAMING: CHATTER")
-
                 from config.settings import settings
 
                 return {
@@ -429,12 +534,9 @@ class RAGWorkflow:
                     "status": "STREAMING"
                 }
 
-            # ================================================================
-            # OTHER - TRUE STREAMING
-            # ================================================================
+            # OTHER
             elif current_agent == "OTHER":
                 logger.info("✅ TRUE STREAMING: OTHER")
-
                 from config.settings import settings
 
                 return {
@@ -446,9 +548,7 @@ class RAGWorkflow:
                     "status": "STREAMING"
                 }
 
-            # ================================================================
-            # REPORTER - Static answer (không cần LLM)
-            # ================================================================
+            # REPORTER
             elif current_agent == "REPORTER":
                 logger.info("📋 REPORTER: Static message")
                 state = self._reporter_node(state)
@@ -466,9 +566,7 @@ class RAGWorkflow:
                     "status": state.get("status", "SUCCESS")
                 }
 
-            # ================================================================
             # Fallback
-            # ================================================================
             else:
                 logger.warning(f"Unknown agent: {current_agent}")
 

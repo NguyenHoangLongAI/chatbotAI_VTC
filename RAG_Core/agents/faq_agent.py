@@ -38,24 +38,40 @@ Trả lời:"""
 
     def process(
             self,
-            question: str,
+            question: str,  # ✅ This MUST be contextualized question (if follow-up)
             is_followup: bool = False,
             context: str = "",
             **kwargs
     ) -> Dict[str, Any]:
         """
-        Xử lý câu hỏi FAQ - KHÔNG CÓ FALLBACK
-        Nếu reranking fail → propagate error
+        Xử lý câu hỏi FAQ - UPDATED: Receives contextualized question
+
+        Args:
+            question: CONTEXTUALIZED question (đã có context nếu là follow-up)
+            is_followup: Flag để biết có phải follow-up không
+            context: Additional context (optional, from supervisor)
+
+        Returns:
+            Dict with status, answer, references, next_agent
         """
         try:
+            logger.info("=" * 50)
+            logger.info("🤖 FAQ AGENT PROCESSING")
+            logger.info("=" * 50)
+            logger.info(f"📝 Question: '{question[:100]}'")
+            logger.info(f"🔄 Is Follow-up: {is_followup}")
+            logger.info(f"📚 Context: {context[:100] if context else 'None'}")
+
             # ===============================================
             # BƯỚC 1: VECTOR SEARCH
             # ===============================================
-            logger.info(f"Step 1: Vector search for FAQ with threshold={self.vector_threshold}")
+            logger.info(f"\n🔍 STEP 1: Vector Search (threshold={self.vector_threshold})")
+
             faq_results = search_faq.invoke({"query": question})
+            # ↑ ✅ QUESTION is CONTEXTUALIZED (if needed)
 
             if not faq_results or "error" in str(faq_results):
-                logger.warning("FAQ vector search failed or returned error")
+                logger.warning("❌ Vector search failed or returned error")
                 return self._route_to_retriever("Vector search failed")
 
             # Lọc theo vector threshold
@@ -65,45 +81,56 @@ Trả lời:"""
             ]
 
             if not filtered_faqs:
-                logger.info(f"No FAQ passed vector threshold {self.vector_threshold}")
+                logger.info(f"⚠️  No FAQ passed vector threshold {self.vector_threshold}")
                 return self._route_to_retriever("No FAQ above vector threshold")
 
-            logger.info(f"Found {len(filtered_faqs)} FAQs above vector threshold")
+            logger.info(f"✅ Found {len(filtered_faqs)} FAQs above threshold")
+
+            # Log top 3 candidates
+            for i, faq in enumerate(filtered_faqs[:3], 1):
+                logger.info(
+                    f"   {i}. Score: {faq.get('similarity_score', 0):.3f} - "
+                    f"Q: '{faq.get('question', '')[:60]}...'"
+                )
 
             # ===============================================
-            # BƯỚC 2: RERANK (NO FALLBACK)
+            # BƯỚC 2: RERANK (receives contextualized question)
             # ===============================================
-            logger.info("Step 2: Reranking FAQs with cross-encoder")
+            logger.info(f"\n🎯 STEP 2: Reranking with Cohere")
+            logger.info(f"   Reranking query: '{question[:100]}'")
 
             reranked_faqs = rerank_faq.invoke({
-                "query": question,
+                "query": question,  # ← ✅ CONTEXTUALIZED QUESTION
                 "faq_results": filtered_faqs
             })
 
             if not reranked_faqs:
-                logger.error("❌ Reranking returned empty results - should not happen")
+                logger.error("❌ Reranking returned empty results")
                 raise RuntimeError("FAQ reranking failed: empty results")
 
             best_faq = reranked_faqs[0]
             rerank_score = best_faq.get("rerank_score", 0)
             similarity_score = best_faq.get("similarity_score", 0)
 
-            logger.info(
-                f"Best FAQ: rerank={rerank_score:.3f}, similarity={similarity_score:.3f}"
-            )
+            logger.info(f"📊 Best FAQ Scores:")
+            logger.info(f"   Rerank:     {rerank_score:.3f}")
+            logger.info(f"   Similarity: {similarity_score:.3f}")
+            logger.info(f"   Question:   '{best_faq.get('question', '')[:100]}'")
 
             # ===============================================
             # BƯỚC 3: CHECK THRESHOLD
             # ===============================================
             is_confident = (
-                similarity_score >= self.force_similarity_threshold
-                or rerank_score >= self.direct_answer_threshold
+                    similarity_score >= self.force_similarity_threshold
+                    or rerank_score >= self.direct_answer_threshold
             )
 
             if not is_confident:
                 logger.info(
-                    f"Rerank {rerank_score:.3f} < {self.rerank_threshold} AND "
-                    f"similarity {similarity_score:.3f} < {self.force_similarity_threshold} → RETRIEVER"
+                    f"⚠️  Not confident enough:\n"
+                    f"   Rerank {rerank_score:.3f} < {self.rerank_threshold}\n"
+                    f"   Similarity {similarity_score:.3f} < {self.force_similarity_threshold}\n"
+                    f"   → Routing to RETRIEVER"
                 )
                 return self._route_to_retriever(
                     f"Not confident: rerank={rerank_score:.3f}, sim={similarity_score:.3f}"
@@ -112,15 +139,18 @@ Trả lời:"""
             # ===============================================
             # BƯỚC 4: TRẢ LỜI TRỰC TIẾP HAY QUA LLM
             # ===============================================
-            if (
-                    rerank_score >= self.direct_answer_threshold
-                    or similarity_score >= self.force_similarity_threshold
-            ):
+            if (rerank_score >= self.direct_answer_threshold or
+                    similarity_score >= self.force_similarity_threshold):
                 logger.info(
-                    f"✅ DIRECT ANSWER: rerank={rerank_score:.3f}, sim={similarity_score:.3f}"
+                    f"✅ HIGH CONFIDENCE - Direct Answer\n"
+                    f"   Rerank: {rerank_score:.3f} (threshold: {self.direct_answer_threshold})\n"
+                    f"   Similarity: {similarity_score:.3f} (threshold: {self.force_similarity_threshold})"
                 )
 
                 answer = self._format_direct_answer(best_faq, question)
+
+                logger.info(f"📤 Answer: {answer[:100]}...")
+                logger.info("=" * 50 + "\n")
 
                 return {
                     "status": "SUCCESS",
@@ -130,7 +160,7 @@ Trả lời:"""
                         {
                             "document_id": best_faq.get("faq_id"),
                             "type": "FAQ",
-                            "description": best_faq.get("question", "")[:500],  # Thêm description
+                            "description": best_faq.get("question", ""),
                             "rerank_score": round(rerank_score, 4),
                             "similarity_score": round(similarity_score, 4)
                         }
@@ -142,7 +172,9 @@ Trả lời:"""
             # BƯỚC 5: DÙNG LLM
             # ===============================================
             logger.info(
-                f"🤖 LLM MODE: rerank={rerank_score:.3f}, sim={similarity_score:.3f}"
+                f"🤖 MEDIUM CONFIDENCE - Using LLM\n"
+                f"   Rerank: {rerank_score:.3f}\n"
+                f"   Similarity: {similarity_score:.3f}"
             )
 
             faq_text = self._format_reranked_faq(reranked_faqs[:3])
@@ -156,14 +188,16 @@ Trả lời:"""
             response = llm_model.invoke(prompt)
 
             if "NOT_FOUND" in response.upper():
-                logger.info("LLM determined FAQ not sufficient")
+                logger.info("🔄 LLM determined FAQ not sufficient → RETRIEVER")
                 return self._route_to_retriever("LLM rejected FAQ")
 
             if not response or len(response.strip()) < 10:
-                logger.warning("Generated answer too short")
+                logger.warning("⚠️  Generated answer too short → RETRIEVER")
                 return self._route_to_retriever("Answer too short")
 
-            logger.info(f"FAQ answer generated via LLM (rerank={rerank_score:.3f})")
+            logger.info(f"✅ FAQ answer generated via LLM")
+            logger.info(f"📤 Answer: {response[:100]}...")
+            logger.info("=" * 50 + "\n")
 
             return {
                 "status": "SUCCESS",
@@ -173,7 +207,7 @@ Trả lời:"""
                     {
                         "document_id": best_faq.get("faq_id"),
                         "type": "FAQ",
-                        "description": best_faq.get("question", "")[:500],
+                        "description": best_faq.get("question", ""),
                         "rerank_score": round(rerank_score, 4),
                         "similarity_score": round(similarity_score, 4)
                     }
@@ -182,12 +216,10 @@ Trả lời:"""
             }
 
         except RuntimeError as e:
-            # Critical errors (reranking fails) - propagate
             logger.error(f"❌ Critical FAQ error: {e}")
             raise
 
         except Exception as e:
-            # Other errors - also propagate
             logger.error(f"❌ Unexpected error in FAQ agent: {e}", exc_info=True)
             raise RuntimeError(f"FAQ agent failed: {e}") from e
 

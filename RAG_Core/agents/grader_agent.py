@@ -1,4 +1,4 @@
-# RAG_Core/agents/grader_agent.py (NO FALLBACK VERSION)
+# RAG_Core/agents/grader_agent.py (RERANK WITH CONTEXT SUMMARY)
 
 from typing import Dict, Any, List
 from tools.vector_search import rerank_documents
@@ -13,10 +13,22 @@ class GraderAgent:
         self.name = "GRADER"
         self.reranking_threshold = 0.6
 
-    def process(self, question: str, documents: List[Dict[str, Any]], **kwargs) -> Dict[str, Any]:
+    def process(
+            self,
+            question: str,
+            documents: List[Dict[str, Any]],
+            context_summary: str = "",  # NEW: Accept context summary
+            is_followup: bool = False,  # NEW: Know if it's a follow-up
+            **kwargs
+    ) -> Dict[str, Any]:
         """
         Đánh giá chất lượng tài liệu bằng reranking model
-        KHÔNG CÓ FALLBACK - nếu rerank fail → raise error
+
+        Args:
+            question: Câu hỏi gốc
+            documents: Danh sách tài liệu
+            context_summary: Ngữ cảnh đã được làm rõ (dùng cho rerank)
+            is_followup: Có phải follow-up question không
         """
         try:
             if not documents:
@@ -28,39 +40,66 @@ class GraderAgent:
                     "next_agent": "NOT_ENOUGH_INFO"
                 }
 
-            # Bước 1: Rerank documents (NO FALLBACK)
-            logger.info(f"Reranking {len(documents)} documents for question: {question[:50]}...")
+            # ================================================================
+            # QUYẾT ĐỊNH QUERY CHO RERANKING
+            # ================================================================
+
+            # Nếu là follow-up và có context summary → dùng context summary
+            if is_followup and context_summary:
+                rerank_query = context_summary
+                logger.info(f"📝 Using CONTEXT SUMMARY for reranking (follow-up)")
+                logger.debug(f"Context Summary: {context_summary[:200]}...")
+            else:
+                # Không phải follow-up hoặc không có context → dùng câu hỏi gốc
+                rerank_query = question
+                logger.info(f"📝 Using ORIGINAL QUESTION for reranking")
+
+            # ================================================================
+            # RERANK DOCUMENTS
+            # ================================================================
+
+            logger.info(f"🔄 Reranking {len(documents)} documents")
+            logger.debug(f"Rerank query: {rerank_query[:100]}...")
 
             reranked_docs = rerank_documents.invoke({
-                "query": question,
+                "query": rerank_query,  # Sử dụng query đã quyết định
                 "documents": documents
             })
 
             if not reranked_docs:
-                logger.error("❌ Reranking returned empty results - this should not happen")
+                logger.error("❌ Reranking returned empty results")
                 raise RuntimeError("Reranking failed: empty results")
 
-            # Bước 2: Lọc documents theo 2 tiêu chí
+            # ================================================================
+            # LỌC DOCUMENTS THEO THRESHOLD
+            # ================================================================
+
             qualified_docs = []
             for doc in reranked_docs:
                 rerank_score = doc.get("rerank_score", 0)
 
-                # Kiểm tra CẢ HAI điểm số
-                if (rerank_score >= self.reranking_threshold):
+                if rerank_score >= self.reranking_threshold:
                     qualified_docs.append(doc)
                     logger.debug(
-                        f"Doc {doc.get('document_id')}: "
-                        f"rerank={rerank_score:.3f} ✓"
+                        f"✓ Doc {doc.get('document_id')}: "
+                        f"rerank={rerank_score:.3f}"
                     )
                 else:
                     logger.debug(
-                        f"Doc {doc.get('document_id')}: "
-                        f"rerank={rerank_score:.3f} ✗"
+                        f"✗ Doc {doc.get('document_id')}: "
+                        f"rerank={rerank_score:.3f} (below threshold)"
                     )
 
-            # Bước 3: Quyết định
+            # ================================================================
+            # QUYẾT ĐỊNH KẾT QUẢ
+            # ================================================================
+
             if qualified_docs:
-                logger.info(f"Found {len(qualified_docs)} qualified documents")
+                logger.info(
+                    f"✅ Found {len(qualified_docs)} qualified documents "
+                    f"(reranked with {'context' if is_followup and context_summary else 'question'})"
+                )
+
                 return {
                     "status": "SUFFICIENT",
                     "qualified_documents": qualified_docs,
@@ -68,9 +107,10 @@ class GraderAgent:
                         {
                             "document_id": doc.get("document_id"),
                             "type": "DOCUMENT",
-                            "description": doc.get("description", "")[:500],
+                            "description": doc.get("description", ""),
                             "rerank_score": round(doc.get("rerank_score", 0), 5),
-                            "similarity_score": round(doc.get("similarity_score", 0), 5)
+                            "similarity_score": round(doc.get("similarity_score", 0), 5),
+                            "reranked_with": "context_summary" if (is_followup and context_summary) else "question"
                         }
                         for doc in qualified_docs
                     ],
@@ -86,11 +126,9 @@ class GraderAgent:
                 }
 
         except RuntimeError as e:
-            # Reranking errors - propagate up
             logger.error(f"❌ Critical error in grader agent: {e}")
             raise
 
         except Exception as e:
-            # Other errors - also propagate
             logger.error(f"❌ Unexpected error in grader agent: {e}", exc_info=True)
             raise RuntimeError(f"Grader agent failed: {e}") from e

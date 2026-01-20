@@ -17,36 +17,46 @@ class SupervisorAgent:
         self.name = "SUPERVISOR"
         self.classification_prompt = """Bạn là chuyên viên đào tạo kỹ năng chuyển đổi số, kiến thức sử dụng công nghệ thông tin cơ bản cho người dân - người điều phối chính của hệ thống chatbot.
 
-Nhiệm vụ:
-1. Dựa vào lịch sử hội thoại và câu hỏi hiện tại, hãy xác định ngữ cảnh (context) mà người dùng đang đề cập đến.
-2. Phân loại câu hỏi và chọn agent phù hợp để xử lý.
+        Nhiệm vụ:
+        1. Dựa vào lịch sử hội thoại và câu hỏi hiện tại, hãy xác định ngữ cảnh (context) mà người dùng đang đề cập đến.
+        2. Phân loại câu hỏi và chọn agent phù hợp để xử lý.
 
-Các agent có thể chọn:
-- FAQ: Dùng cho chào hỏi thân thiện, câu hỏi thường gặp, hoặc các yêu cầu liên quan đến đào tạo kỹ năng chuyển đổi số cho người dân và doanh nghiệp. Bao gồm:
-  - Tư vấn giải pháp, ứng dụng chuyển đổi số cho doanh nghiệp và người dân
-  - An toàn thông tin: bảo vệ dữ liệu cá nhân, nhận diện lừa đảo, bảo mật tài khoản.
-  - Thông tin và kiến thức về AI: cách dùng AI cơ bản, rủi ro khi sử dụng AI, ứng dụng AI phục vụ học tập và công việc.
-  - Tin học văn phòng: Word, Excel, PowerPoint, email, quản lý file.
-  - Kiến thức công nghệ thông tin cơ bản: thao tác thiết bị, kết nối Internet, sử dụng ứng dụng số trong đời sống.
-- OTHER: Câu hỏi hoặc yêu cầu nằm ngoài phạm vi chuyển đổi số.
-- CHATTER: Người dùng có dấu hiệu không hài lòng, giận dữ, hoặc cần được an ủi, làm dịu.
-- REPORTER: Khi người dùng phản ánh lỗi, mất kết nối, hoặc vấn đề kỹ thuật của hệ thống.
+        Các agent có thể chọn:
+        - FAQ: Dùng cho chào hỏi thân thiện, câu hỏi thường gặp, hoặc các yêu cầu liên quan đến đào tạo kỹ năng chuyển đổi số cho người dân và doanh nghiệp.
+        - OTHER: Câu hỏi hoặc yêu cầu nằm ngoài phạm vi chuyển đổi số.
+        - CHATTER: Người dùng có dấu hiệu không hài lòng, giận dữ, hoặc cần được an ủi, làm dịu.
+        - REPORTER: Khi người dùng phản ánh lỗi, mất kết nối, hoặc vấn đề kỹ thuật của hệ thống.
 
-Đầu vào:
-Câu hỏi gốc: "{original_question}"
-Câu hỏi đã được làm rõ ngữ cảnh: "{contextualized_question}"
-Lịch sử hội thoại: {history}
-Trạng thái hệ thống: {system_status}
-Có phải follow-up question: {is_followup}
-Context liên quan: {relevant_context}
+        Đầu vào:
+        Câu hỏi gốc: "{original_question}"
+        Câu hỏi đã được làm rõ ngữ cảnh: "{contextualized_question}"
+        Lịch sử hội thoại: {history}
+        Trạng thái hệ thống: {system_status}
+        Có phải follow-up question: {is_followup}
+        Context liên quan: {relevant_context}
 
-Hãy trả lời đúng định dạng JSON:
-{{
-  "context_summary": "Tóm tắt ngắn gọn ngữ cảnh (nếu có)",
-  "agent": "FAQ" hoặc "CHATTER" hoặc "REPORTER" hoặc "OTHER"
-}}
+        YÊU CẦU QUAN TRỌNG:
+        - BẮT BUỘC trả lời context_summary BẰNG TIẾNG VIỆT
+        - KHÔNG được dùng tiếng Anh trong context_summary
+        - Nếu không có context, ghi "Câu hỏi độc lập" hoặc "Không có ngữ cảnh"
 
-Chỉ trả về JSON, không thêm text nào khác."""
+        Hãy trả lời đúng định dạng JSON:
+        {{
+          "context_summary": "Tóm tắt ngắn gọn ngữ cảnh BẰNG TIẾNG VIỆT (nếu có)",
+          "agent": "FAQ" hoặc "CHATTER" hoặc "REPORTER" hoặc "OTHER"
+        }}
+
+        Ví dụ context_summary hợp lệ:
+        - "Hỏi về cách sử dụng AI"
+        - "Tiếp tục về chủ đề an toàn thông tin"
+        - "Câu hỏi độc lập"
+        - "Không có ngữ cảnh"
+
+        Ví dụ KHÔNG hợp lệ (đừng làm thế này):
+        - "Asking about AI usage"
+        - "Follow-up question about security"
+
+        Chỉ trả về JSON, không thêm text nào khác."""
 
     def classify_request(
             self,
@@ -56,19 +66,20 @@ Chỉ trả về JSON, không thêm text nào khác."""
         """
         Phân loại yêu cầu và chọn agent phù hợp
 
-        Returns:
-            {
-                "agent": str,
-                "contextualized_question": str,
-                "context_summary": str,
-                "is_followup": bool
-            }
+        UPDATED: Better logging for context extraction
         """
         try:
+            logger.info("-" * 50)
+            logger.info("👨‍💼 SUPERVISOR CLASSIFICATION")
+            logger.info("-" * 50)
+            logger.info(f"📝 Original Question: '{question}'")
+            logger.info(f"📚 History Length: {len(history) if history else 0} messages")
+
             # Kiểm tra trạng thái hệ thống
             db_status = check_database_connection.invoke({})
 
             if not db_status.get("connected", False):
+                logger.warning("⚠️  Database not connected → REPORTER")
                 return {
                     "agent": "REPORTER",
                     "contextualized_question": question,
@@ -77,6 +88,8 @@ Chỉ trả về JSON, không thêm text nào khác."""
                 }
 
             # Xử lý context từ history
+            logger.info("🔍 Extracting context from history...")
+
             context_info = context_processor.extract_context_from_history(
                 history or [],
                 question
@@ -86,16 +99,22 @@ Chỉ trả về JSON, không thêm text nào khác."""
             is_followup = context_info["is_followup"]
             relevant_context = context_info["relevant_context"]
 
-            # Nếu LLM không xác định được ngữ cảnh hợp lệ → coi như câu hỏi độc lập
+            # Log contextualization result
+            if is_followup:
+                logger.info("✅ FOLLOW-UP QUESTION DETECTED")
+                logger.info(f"   Original:      '{question}'")
+                logger.info(f"   Contextualized: '{contextualized_question}'")
+                logger.info(f"   Context:       {relevant_context[:100]}...")
+            else:
+                logger.info("📌 STANDALONE QUESTION")
+                logger.info(f"   Question: '{contextualized_question}'")
+
+            # Nếu LLM không xác định được ngữ cảnh hợp lệ
             if "[cần làm rõ]" in contextualized_question:
-                logger.info("Context unclear → xử lý như câu hỏi mới.")
+                logger.info("⚠️  Context unclear → treating as standalone")
                 contextualized_question = question
                 is_followup = False
                 relevant_context = ""
-
-            logger.info(f"Original Q: {question}")
-            logger.info(f"Contextualized Q: {contextualized_question}")
-            logger.info(f"Is follow-up: {is_followup}")
 
             # Format lịch sử
             history_text = self._format_history(history or [])
@@ -111,6 +130,7 @@ Chỉ trả về JSON, không thêm text nào khác."""
             )
 
             # Gọi LLM để phân loại
+            logger.info("🤖 Calling LLM for agent classification...")
             response = llm_model.invoke(prompt)
 
             # Parse JSON response
@@ -121,8 +141,14 @@ Chỉ trả về JSON, không thêm text nào khác."""
             agent_choice = classification.get("agent", "").upper()
 
             if agent_choice not in valid_agents:
-                # Fallback classification
+                logger.warning(f"⚠️  Invalid agent '{agent_choice}' → fallback classification")
                 agent_choice = self._fallback_classify(contextualized_question)
+
+            logger.info(f"\n🎯 CLASSIFICATION RESULT:")
+            logger.info(f"   Agent: {agent_choice}")
+            logger.info(f"   Is Follow-up: {is_followup}")
+            logger.info(f"   Context Summary: {classification.get('context_summary', '')[:100]}")
+            logger.info("-" * 50 + "\n")
 
             return {
                 "agent": agent_choice,
@@ -133,7 +159,8 @@ Chỉ trả về JSON, không thêm text nào khác."""
             }
 
         except Exception as e:
-            logger.error(f"Error in supervisor classification: {e}", exc_info=True)
+            logger.error(f"❌ Error in supervisor classification: {e}", exc_info=True)
+            logger.info("↩️  Using fallback classification")
             return {
                 "agent": self._fallback_classify(question),
                 "contextualized_question": question,
