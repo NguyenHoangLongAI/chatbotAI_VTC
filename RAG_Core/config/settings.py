@@ -1,4 +1,4 @@
-# RAG_Core/config/settings.py (ADD FAQ SECTION)
+# RAG_Core/config/settings.py (UPDATED WITH NGROK URL)
 
 from typing import Optional
 
@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     MILVUS_PORT: str = "19530"
     DOCUMENT_COLLECTION: str = "document_embeddings"
     FAQ_COLLECTION: str = "faq_embeddings"
+    DOCUMENT_URLS_COLLECTION: str = "document_urls"  # NEW
 
     # ===== Ollama / LLM =====
     OLLAMA_URL: str = "http://ollama:11434"
@@ -36,24 +37,34 @@ class Settings(BaseSettings):
     MAX_ITERATIONS: int = 5
 
     # ===== FAQ OPTIMIZATION SETTINGS =====
-    # Vector search thresholds
-    FAQ_VECTOR_THRESHOLD: float = 0.5  # Ngưỡng cho vector search (thấp để cast wide net)
-    FAQ_TOP_K: int = 10  # Số lượng FAQ candidates cho reranking
-
-    # Reranking thresholds
-    FAQ_RERANK_THRESHOLD: float = 0.6  # Ngưỡng cho reranked results (cao hơn)
-
-    # Reranking weights (tổng = 1.0)
-    FAQ_QUESTION_WEIGHT: float = 0.5  # Trọng số cho question-only matching
-    FAQ_QA_WEIGHT: float = 0.3  # Trọng số cho question+answer matching
-    FAQ_ANSWER_WEIGHT: float = 0.2  # Trọng số cho answer-only matching
-
-    # Bonus settings
-    FAQ_CONSISTENCY_BONUS: float = 1.1  # Bonus multiplier khi tất cả variants đều cao
-    FAQ_CONSISTENCY_THRESHOLD: float = 0.75  # Ngưỡng để được bonus
+    FAQ_VECTOR_THRESHOLD: float = 0.5
+    FAQ_TOP_K: int = 10
+    FAQ_RERANK_THRESHOLD: float = 0.6
+    FAQ_QUESTION_WEIGHT: float = 0.5
+    FAQ_QA_WEIGHT: float = 0.3
+    FAQ_ANSWER_WEIGHT: float = 0.2
+    FAQ_CONSISTENCY_BONUS: float = 1.1
+    FAQ_CONSISTENCY_THRESHOLD: float = 0.75
 
     # ===== Document Grader Settings =====
-    DOCUMENT_RERANK_THRESHOLD: float = 0.7  # Rerank threshold cho documents
+    DOCUMENT_RERANK_THRESHOLD: float = 0.7
+
+    # ===== NEW: DOCUMENT URL SETTINGS =====
+    # Internal MinIO URL (used by services)
+    MINIO_INTERNAL_URL: str = "http://localhost:9000"
+
+    # Public ngrok URL (for user-facing responses)
+    # Example: "https://b1234567.ngrok-free.app"
+    NGROK_PUBLIC_URL: Optional[str] = "https://388ca155881e.ngrok-free.app"
+
+    # Enable URL replacement
+    ENABLE_URL_REPLACEMENT: bool = True
+
+    # URL formatting style
+    URL_FORMAT_STYLE: str = "detailed"  # simple | detailed | markdown | html
+
+    # Maximum URLs to show in footer
+    MAX_REFERENCE_URLS: int = 5
 
     # ===== Contact =====
     SUPPORT_PHONE: str = "Phòng vận hành 0904540490 - Phòng kinh doanh:0914616081"
@@ -69,6 +80,31 @@ class Settings(BaseSettings):
         class Config:
             env_file = ".env"
             extra = "ignore"
+
+    def get_public_url(self, internal_url: str) -> str:
+        """
+        Convert internal MinIO URL to public ngrok URL
+
+        Args:
+            internal_url: http://localhost:9000/public-documents/file.pdf
+
+        Returns:
+            https://b1234567.ngrok-free.app/public-documents/file.pdf
+        """
+        if not self.ENABLE_URL_REPLACEMENT:
+            return internal_url
+
+        if not self.NGROK_PUBLIC_URL:
+            return internal_url
+
+        # Replace internal URL with ngrok URL
+        if internal_url.startswith(self.MINIO_INTERNAL_URL):
+            return internal_url.replace(
+                self.MINIO_INTERNAL_URL,
+                self.NGROK_PUBLIC_URL.rstrip('/')
+            )
+
+        return internal_url
 
 
 # Singleton settings

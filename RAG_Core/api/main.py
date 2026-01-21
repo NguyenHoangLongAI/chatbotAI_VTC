@@ -1,4 +1,4 @@
-# RAG_Core/api/main.py - FIXED STREAMING VERSION
+# RAG_Core/api/main.py - WITH DOCUMENT URLs INTEGRATION
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,6 +16,9 @@ from .schemas import (
 from workflow.rag_workflow import RAGWorkflow
 from database.milvus_client import milvus_client
 
+# NEW: Import document URL service
+from services.document_url_service import document_url_service
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -23,9 +26,9 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 app = FastAPI(
-    title="RAG Multi-Agent Chatbot API with Streaming",
-    description="API cho hệ thống chatbot RAG với streaming support",
-    version="2.0.0"
+    title="RAG Multi-Agent Chatbot API with Document URLs",
+    description="API cho hệ thống chatbot RAG với streaming và document URLs",
+    version="2.1.0"
 )
 
 app.add_middleware(
@@ -46,6 +49,7 @@ async def startup_event():
     try:
         rag_workflow = RAGWorkflow()
         logger.info("✅ RAG Workflow initialized successfully")
+        logger.info("✅ Document URL service initialized")
     except Exception as e:
         logger.error(f"⚠️  Failed to initialize RAG Workflow: {e}")
 
@@ -53,15 +57,38 @@ async def startup_event():
 @app.get("/", response_model=dict)
 async def root():
     """Root endpoint"""
+    from config.settings import settings
+
     return {
         "service": "RAG Multi-Agent Chatbot API",
-        "version": "2.0.0",
-        "features": ["streaming", "multi-agent", "context-aware"],
+        "version": "2.1.0",
+        "features": ["streaming", "multi-agent", "context-aware", "document-urls"],
         "endpoints": {
             "chat": "/chat",
             "health": "/health"
+        },
+        "url_config": {
+            "ngrok_enabled": settings.NGROK_PUBLIC_URL is not None,
+            "url_replacement_enabled": settings.ENABLE_URL_REPLACEMENT
         }
     }
+
+
+def enrich_references_with_urls(references: List[dict]) -> List[dict]:
+    """
+    Helper function to enrich references with document URLs
+
+    Args:
+        references: List of reference dicts
+
+    Returns:
+        List of enriched references
+    """
+    try:
+        return document_url_service.enrich_references_with_urls(references)
+    except Exception as e:
+        logger.error(f"Error enriching references: {e}")
+        return references
 
 
 async def generate_streaming_response(
@@ -69,7 +96,7 @@ async def generate_streaming_response(
         history: List
 ) -> AsyncIterator[str]:
     """
-    FIXED: Async generator với proper error handling
+    Async generator với document URLs support
     """
     try:
         logger.info(f"🚀 Starting streaming for: {question[:50]}...")
@@ -82,7 +109,7 @@ async def generate_streaming_response(
             "status": "processing"
         }
         yield f"data: {json.dumps(start_chunk)}\n\n"
-        await asyncio.sleep(0.01)  # Small delay
+        await asyncio.sleep(0.01)
 
         # Run workflow
         result = await rag_workflow.run_with_streaming(question, history)
@@ -98,7 +125,7 @@ async def generate_streaming_response(
         if answer_stream:
             chunk_count = 0
             async for chunk in answer_stream:
-                if chunk:  # Only send non-empty chunks
+                if chunk:
                     chunk_count += 1
                     chunk_data = {
                         "type": "chunk",
@@ -107,7 +134,7 @@ async def generate_streaming_response(
                         "status": None
                     }
                     yield f"data: {json.dumps(chunk_data)}\n\n"
-                    await asyncio.sleep(0.001)  # Tiny delay for smooth streaming
+                    await asyncio.sleep(0.001)
 
             logger.info(f"✅ Streamed {chunk_count} chunks")
         else:
@@ -120,16 +147,28 @@ async def generate_streaming_response(
             }
             yield f"data: {json.dumps(error_chunk)}\n\n"
 
-        # Send references
+        # ===== NEW: ENRICH REFERENCES WITH URLs =====
         if references:
-            # Convert references to serializable format
+            logger.info("🔗 Enriching references with document URLs...")
+            enriched_refs = enrich_references_with_urls(references)
+
+            # Convert to serializable format
             serializable_refs = []
-            for ref in references:
-                serializable_refs.append({
+            for ref in enriched_refs:
+                ref_dict = {
                     "document_id": ref.get("document_id", ""),
                     "type": ref.get("type", "DOCUMENT"),
                     "description": ref.get("description", "")
-                })
+                }
+
+                # Add URL fields if available
+                if ref.get("url"):
+                    ref_dict["url"] = ref["url"]
+                    ref_dict["filename"] = ref.get("filename", "")
+                    ref_dict["file_type"] = ref.get("file_type", "")
+                    logger.info(f"  ✅ {ref['document_id']}: {ref.get('filename', 'N/A')}")
+
+                serializable_refs.append(ref_dict)
 
             ref_chunk = {
                 "type": "references",
@@ -138,7 +177,7 @@ async def generate_streaming_response(
                 "status": None
             }
             yield f"data: {json.dumps(ref_chunk)}\n\n"
-            logger.info(f"📚 Sent {len(serializable_refs)} references")
+            logger.info(f"📚 Sent {len(serializable_refs)} enriched references")
 
         # Send end chunk
         end_chunk = {
@@ -164,7 +203,7 @@ async def generate_streaming_response(
 @app.post("/chat")
 async def chat(request: ChatRequest):
     """
-    Main chat endpoint - supports streaming and non-streaming
+    Main chat endpoint - supports streaming and non-streaming with document URLs
     """
     try:
         if not rag_workflow:
@@ -192,13 +231,23 @@ async def chat(request: ChatRequest):
         logger.info("📋 Using non-streaming mode")
         result = rag_workflow.run(request.question, request.history)
 
+        # ===== NEW: ENRICH REFERENCES WITH URLs =====
+        raw_references = result.get("references", [])
+        enriched_references = enrich_references_with_urls(raw_references)
+
         references = []
-        for ref in result.get("references", []):
-            references.append(DocumentReference(
+        for ref in enriched_references:
+            ref_obj = DocumentReference(
                 document_id=ref.get("document_id", "unknown"),
                 type=ref.get("type", "DOCUMENT"),
-                description=ref.get("description", None)
-            ))
+                description=ref.get("description", None),
+                url=ref.get("url", None),
+                filename=ref.get("filename", None),
+                file_type=ref.get("file_type", None)
+            )
+            references.append(ref_obj)
+
+        logger.info(f"📚 Returning {len(references)} references with URLs")
 
         return ChatResponse(
             answer=result.get("answer", "Lỗi xử lý câu hỏi"),
@@ -227,11 +276,16 @@ async def health_check():
             logger.warning(f"Database check failed: {db_error}")
 
         workflow_ready = rag_workflow is not None
+        url_service_ready = document_url_service.collection is not None
 
         if db_connected and workflow_ready:
+            message = "Hệ thống hoạt động bình thường"
+            if url_service_ready:
+                message += " (với document URLs)"
+
             return HealthResponse(
                 status="healthy",
-                message="Hệ thống hoạt động bình thường",
+                message=message,
                 database_connected=True
             )
         elif workflow_ready and not db_connected:
@@ -259,6 +313,8 @@ async def health_check():
 @app.get("/agents")
 async def list_agents():
     """List available agents"""
+    from config.settings import settings
+
     return {
         "agents": {
             "SUPERVISOR": "Điều phối chính",
@@ -273,7 +329,9 @@ async def list_agents():
         },
         "features": {
             "streaming": "enabled",
-            "context_aware": "enabled"
+            "context_aware": "enabled",
+            "document_urls": "enabled",
+            "ngrok_integration": settings.NGROK_PUBLIC_URL is not None
         },
         "status": "ready" if rag_workflow else "not_initialized"
     }
