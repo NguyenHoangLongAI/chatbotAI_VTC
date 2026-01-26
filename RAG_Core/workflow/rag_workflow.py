@@ -1,4 +1,4 @@
-# RAG_Core/workflow/rag_workflow.py - FIXED: Enrich references BEFORE generator
+# RAG_Core/workflow/rag_workflow.py - FIXED: Complete with ChatbotState
 
 from typing import Dict, Any, List, AsyncIterator
 from langgraph.graph import StateGraph
@@ -14,14 +14,12 @@ from agents.grader_agent import GraderAgent
 from agents.generator_agent import GeneratorAgent
 from agents.reporter_agent import ReporterAgent
 
-# Import streaming agents
 from agents.base_agent import (
     StreamingChatterAgent,
     StreamingOtherAgent,
     StreamingNotEnoughInfoAgent
 )
 
-# ===== NEW: Import URL service =====
 from services.document_url_service import document_url_service
 
 logger = logging.getLogger(__name__)
@@ -111,22 +109,16 @@ class RAGWorkflow:
 
         return workflow.compile()
 
-    # ===== NEW: Helper to enrich references with URLs =====
     def _enrich_references_with_urls(self, references: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """
-        Enrich references with document URLs
-        """
+        """Enrich references with document URLs"""
         try:
             if not references:
                 return []
 
             enriched = document_url_service.enrich_references_with_urls(references)
-
-            # Log enrichment
             urls_added = sum(1 for ref in enriched if ref.get('url'))
             if urls_added > 0:
                 logger.info(f"🔗 Enriched {urls_added}/{len(references)} references with URLs")
-
             return enriched
 
         except Exception as e:
@@ -134,13 +126,15 @@ class RAGWorkflow:
             return references
 
     def _parallel_execution_node(self, state: ChatbotState) -> ChatbotState:
-        """Parallel execution node"""
+        """
+        UPDATED: Supervisor tự xử lý context, không cần context_processor
+        """
         question = state["question"]
         history = state.get("history", [])
 
         logger.info("🚀 Starting parallel execution")
 
-        # Step 1: Supervisor
+        # Step 1: Supervisor (đã tự xử lý context)
         supervisor_result = self._get_result_with_timeout(
             self.executor.submit(self._safe_execute_supervisor, question, history),
             timeout=20,
@@ -153,25 +147,29 @@ class RAGWorkflow:
             name="Supervisor"
         )
 
+        # Extract từ supervisor result
         context_summary = supervisor_result.get("context_summary", "")
         is_followup = supervisor_result.get("is_followup", False)
         contextualized_question = supervisor_result.get("contextualized_question", question)
 
         logger.info(
             f"📋 Supervisor: agent={supervisor_result.get('agent')}, "
-            f"follow-up={is_followup}, has_context={bool(context_summary)}"
+            f"follow-up={is_followup}, context='{context_summary[:50]}'"
         )
 
         # Step 2: FAQ + RETRIEVER in parallel
+        # FAQ uses contextualized_question
         future_faq = self.executor.submit(
             self._safe_execute_faq,
-            contextualized_question,
-            history
+            contextualized_question,  # ← Use contextualized question
+            is_followup,
+            context_summary
         )
 
+        # RETRIEVER uses context_summary nếu là follow-up
         future_retriever = self.executor.submit(
             self._safe_execute_retriever,
-            question,
+            question,  # Original question
             context_summary,
             is_followup
         )
@@ -190,14 +188,14 @@ class RAGWorkflow:
             name="RETRIEVER"
         )
 
-        # ===== NEW: Enrich FAQ references with URLs =====
+        # Enrich FAQ references
         if faq_result.get("references"):
             faq_result["references"] = self._enrich_references_with_urls(
                 faq_result["references"]
             )
 
         state["supervisor_classification"] = supervisor_result
-        state["question"] = contextualized_question
+        state["question"] = contextualized_question  # Use contextualized
         state["is_followup"] = is_followup
         state["context_summary"] = context_summary
         state["faq_result"] = faq_result
@@ -207,8 +205,7 @@ class RAGWorkflow:
         logger.info(
             f"✅ Parallel execution completed:\n"
             f"  - FAQ: {faq_result.get('status')}\n"
-            f"  - RETRIEVER: {retriever_result.get('status')}, "
-            f"docs={len(retriever_result.get('documents', []))}"
+            f"  - RETRIEVER: {retriever_result.get('status')}"
         )
 
         return state
@@ -228,18 +225,6 @@ class RAGWorkflow:
             return self.supervisor.classify_request(question, history)
         except Exception as e:
             logger.error(f"❌ Supervisor error: {e}")
-            return self._fallback_supervisor_classification(question)
-
-    def _fallback_supervisor_classification(self, question: str) -> Dict[str, Any]:
-        try:
-            agent = self.supervisor._fallback_classify(question)
-            return {
-                "agent": agent,
-                "contextualized_question": question,
-                "context_summary": "",
-                "is_followup": False
-            }
-        except Exception:
             return {
                 "agent": "FAQ",
                 "contextualized_question": question,
@@ -247,12 +232,27 @@ class RAGWorkflow:
                 "is_followup": False
             }
 
-    def _safe_execute_faq(self, question: str, history: List) -> Dict[str, Any]:
+    def _safe_execute_faq(
+            self,
+            question: str,
+            is_followup: bool = False,
+            context_summary: str = ""
+    ) -> Dict[str, Any]:
+        """Execute FAQ agent"""
         try:
-            return self.faq_agent.process(question, is_followup=False, context="")
+            return self.faq_agent.process(
+                question=question,
+                is_followup=is_followup,
+                context=context_summary
+            )
         except Exception as e:
             logger.error(f"FAQ error: {e}")
-            return {"status": "ERROR", "answer": "", "references": [], "next_agent": "RETRIEVER"}
+            return {
+                "status": "ERROR",
+                "answer": "",
+                "references": [],
+                "next_agent": "RETRIEVER"
+            }
 
     def _safe_execute_retriever(
             self,
@@ -299,7 +299,7 @@ class RAGWorkflow:
             logger.info("→ FAQ has answer")
             state["status"] = faq_result["status"]
             state["answer"] = faq_result.get("answer", "")
-            state["references"] = faq_result.get("references", [])  # Already enriched
+            state["references"] = faq_result.get("references", [])
             state["current_agent"] = "end"
             return state
 
@@ -321,10 +321,7 @@ class RAGWorkflow:
             context_summary = state.get("context_summary", "")
             is_followup = state.get("is_followup", False)
 
-            logger.info(
-                f"📊 Grader: Processing {len(documents)} documents "
-                f"(follow-up={is_followup})"
-            )
+            logger.info(f"📊 Grader: Processing {len(documents)} documents")
 
             import inspect
             sig = inspect.signature(self.grader_agent.process)
@@ -342,7 +339,6 @@ class RAGWorkflow:
                     documents=documents
                 )
 
-            # ===== NEW: Enrich references with URLs =====
             if result.get("references"):
                 result["references"] = self._enrich_references_with_urls(
                     result["references"]
@@ -350,14 +346,10 @@ class RAGWorkflow:
 
             state["status"] = result["status"]
             state["qualified_documents"] = result.get("qualified_documents", [])
-            state["references"] = result.get("references", [])  # Already enriched
+            state["references"] = result.get("references", [])
             state["current_agent"] = result.get("next_agent", "GENERATOR")
 
-            logger.info(
-                f"📊 Grader result: {result['status']}, "
-                f"qualified={len(result.get('qualified_documents', []))}"
-            )
-
+            logger.info(f"📊 Grader result: {result['status']}")
             return state
 
         except Exception as e:
@@ -366,27 +358,21 @@ class RAGWorkflow:
             return state
 
     def _generator_node(self, state: ChatbotState) -> ChatbotState:
-        """
-        ✅ FIXED: Generator receives enriched references
-        """
+        """Generator with enriched references"""
         try:
-            # ===== IMPORTANT: Pass enriched references to generator =====
             result = self.generator_agent.process(
                 question=state["question"],
                 documents=state.get("qualified_documents", []),
-                references=state.get("references", []),  # ← Already enriched with URLs
+                references=state.get("references", []),
                 history=state.get("history", []),
                 is_followup=state.get("is_followup", False),
                 context_summary=state.get("context_summary", "")
             )
 
             state["status"] = result["status"]
-            state["answer"] = result.get("answer", "")  # ← Should have URLs appended
+            state["answer"] = result.get("answer", "")
             state["references"] = result.get("references", [])
             state["current_agent"] = "end"
-
-            logger.info(f"✅ Generator: Answer length={len(state['answer'])}")
-
             return state
 
         except Exception as e:
@@ -481,7 +467,9 @@ class RAGWorkflow:
             question: str,
             history: List[Dict[str, str]] = None
     ) -> Dict[str, Any]:
-        """Streaming workflow with URL enrichment"""
+        """
+        UPDATED: FAQ có thể stream trực tiếp
+        """
         try:
             logger.info(f"🚀 Streaming workflow start: {question[:100]}")
 
@@ -492,33 +480,48 @@ class RAGWorkflow:
             current_agent = state.get("current_agent")
             logger.info(f"📍 Routed to: {current_agent}")
 
-            # FAQ - Direct answer (already has enriched references)
+            # FAQ - STREAM FROM LLM
             if current_agent == "end":
-                answer_text = state.get("answer", "")
+                faq_result = state.get("faq_result", {})
 
-                async def faq_generator():
-                    words = answer_text.split()
-                    for word in words:
-                        yield word + " "
-                        await asyncio.sleep(0.01)
+                if faq_result.get("status") == "SUCCESS":
+                    logger.info("✅ FAQ SUCCESS - STREAMING from LLM")
 
-                return {
-                    "answer_stream": faq_generator(),
-                    "references": state.get("references", []),
-                    "status": state.get("status", "SUCCESS")
-                }
+                    return {
+                        "answer_stream": self.faq_agent.process_streaming(
+                            question=state["question"],
+                            is_followup=state.get("is_followup", False),
+                            context=state.get("context_summary", "")
+                        ),
+                        "references": faq_result.get("references", []),
+                        "status": "STREAMING"
+                    }
+                else:
+                    answer_text = state.get("answer", "Không có câu trả lời")
+
+                    async def static_generator():
+                        words = answer_text.split()
+                        for word in words:
+                            yield word + " "
+                            await asyncio.sleep(0.01)
+
+                    return {
+                        "answer_stream": static_generator(),
+                        "references": state.get("references", []),
+                        "status": state.get("status", "SUCCESS")
+                    }
 
             # GRADER → GENERATOR or NOT_ENOUGH_INFO
             elif current_agent == "GRADER":
-                state = self._grader_node(state)  # References enriched here
+                state = self._grader_node(state)
 
                 if state.get("current_agent") == "GENERATOR":
-                    logger.info("✅ TRUE STREAMING: GENERATOR")
+                    logger.info("✅ STREAMING: GENERATOR")
                     return {
                         "answer_stream": self.generator_agent.process_streaming(
                             question=state["question"],
                             documents=state.get("qualified_documents", []),
-                            references=state.get("references", []),  # ← Enriched references
+                            references=state.get("references", []),
                             history=history or [],
                             is_followup=state.get("is_followup", False),
                             context_summary=state.get("context_summary", "")
@@ -527,7 +530,7 @@ class RAGWorkflow:
                         "status": "STREAMING"
                     }
                 else:
-                    logger.info("✅ TRUE STREAMING: NOT_ENOUGH_INFO")
+                    logger.info("✅ STREAMING: NOT_ENOUGH_INFO")
                     from config.settings import settings
 
                     return {
@@ -539,9 +542,8 @@ class RAGWorkflow:
                         "status": "STREAMING"
                     }
 
-            # Other agents...
             elif current_agent == "CHATTER":
-                logger.info("✅ TRUE STREAMING: CHATTER")
+                logger.info("✅ STREAMING: CHATTER")
                 from config.settings import settings
 
                 return {
@@ -555,7 +557,7 @@ class RAGWorkflow:
                 }
 
             elif current_agent == "OTHER":
-                logger.info("✅ TRUE STREAMING: OTHER")
+                logger.info("✅ STREAMING: OTHER")
                 from config.settings import settings
 
                 return {
@@ -568,7 +570,7 @@ class RAGWorkflow:
                 }
 
             elif current_agent == "REPORTER":
-                logger.info("📋 REPORTER: Static message")
+                logger.info("📋 REPORTER")
                 state = self._reporter_node(state)
                 answer_text = state.get("answer", "")
 
