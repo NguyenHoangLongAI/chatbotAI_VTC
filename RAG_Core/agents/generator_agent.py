@@ -1,4 +1,4 @@
-# RAG_Core/agents/generator_agent.py - WITH URL FORMATTING
+# RAG_Core/agents/generator_agent.py - FIXED STREAMING VERSION
 
 from typing import Dict, Any, List, AsyncIterator
 from models.llm_model import llm_model
@@ -148,41 +148,6 @@ Hãy trả lời:"""
 
         return "Đang trong cuộc trò chuyện"
 
-    def _format_references_footer(self, references: List[Dict[str, Any]]) -> str:
-        """
-        NEW: Format references với URLs thành footer
-
-        Returns formatted text như:
-
-        📚 Tài liệu tham khảo:
-        1. Thông tư 01/2022/TT-BTTTT
-           📎 https://ngrok.../01_2022_TT-BTTTT.pdf
-        2. Quyết định 02/2023/QĐ-TTg
-           📎 https://ngrok.../02_2023_QD-TTg.pdf
-        """
-        if not references:
-            return ""
-
-        # Chỉ lấy references có URL
-        refs_with_urls = [ref for ref in references if ref.get('url')]
-
-        if not refs_with_urls:
-            return ""
-
-        footer_lines = ["\n\n📚 Tài liệu tham khảo:"]
-
-        for i, ref in enumerate(refs_with_urls[:3], 1):  # Limit 5 URLs
-            filename = ref.get('filename', ref.get('document_id', 'Unknown'))
-            url = ref.get('url')
-
-            # Remove extension for display
-            display_name = filename.rsplit('.', 1)[0] if '.' in filename else filename
-
-            footer_lines.append(f"{i}. {display_name}")
-            footer_lines.append(f"   📎 {url}")
-
-        return "\n".join(footer_lines)
-
     def process(
             self,
             question: str,
@@ -193,7 +158,7 @@ Hãy trả lời:"""
             context_summary: str = "",
             **kwargs
     ) -> Dict[str, Any]:
-        """Non-streaming generation with URL footer"""
+        """Non-streaming generation (original)"""
         try:
             if not documents:
                 return {
@@ -224,19 +189,13 @@ Hãy trả lời:"""
                     documents=doc_text
                 )
 
-            # Generate answer
+            # Generate answer (non-streaming)
             answer = llm_model.invoke(prompt)
 
             if not answer or len(answer.strip()) < 10:
                 answer = "Tôi đã tìm thấy thông tin liên quan nhưng gặp khó khăn trong việc tạo câu trả lời."
 
-            # ===== NEW: Append references footer với URLs =====
             unique_references = self._deduplicate_references(references or [])
-            references_footer = self._format_references_footer(unique_references)
-
-            if references_footer:
-                answer = answer + references_footer
-                logger.info(f"✅ Appended {len([r for r in unique_references if r.get('url')])} URLs to answer")
 
             return {
                 "status": "SUCCESS",
@@ -265,7 +224,9 @@ Hãy trả lời:"""
             **kwargs
     ) -> AsyncIterator[str]:
         """
-        Streaming generation with URL footer appended at the end
+        FIXED: Streaming generation with proper async/await
+
+        Returns async generator that yields text chunks
         """
         try:
             logger.info(f"🚀 Generator: Starting streaming for: {question[:50]}...")
@@ -298,28 +259,15 @@ Hãy trả lời:"""
 
             logger.info(f"📝 Generator: Prompt prepared, length={len(prompt)}")
 
-            # Stream from LLM
+            # CRITICAL: Stream from LLM
             chunk_count = 0
             async for chunk in llm_model.astream(prompt):
-                if chunk:
+                if chunk:  # Only yield non-empty chunks
                     chunk_count += 1
                     logger.debug(f"Generator yielding chunk #{chunk_count}: {chunk[:30]}...")
                     yield chunk
 
             logger.info(f"✅ Generator: Completed streaming {chunk_count} chunks")
-
-            # ===== NEW: Stream references footer with URLs =====
-            unique_references = self._deduplicate_references(references or [])
-            references_footer = self._format_references_footer(unique_references)
-
-            if references_footer:
-                logger.info("📎 Streaming references footer with URLs...")
-                # Stream footer slowly for better UX
-                for line in references_footer.split('\n'):
-                    yield line + '\n'
-                    await asyncio.sleep(0.05)  # Small delay between lines
-
-                logger.info(f"✅ Streamed {len([r for r in unique_references if r.get('url')])} URLs")
 
         except Exception as e:
             logger.error(f"❌ Generator streaming error: {e}", exc_info=True)
