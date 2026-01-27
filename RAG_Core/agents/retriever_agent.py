@@ -1,4 +1,4 @@
-# RAG_Core/agents/retriever_agent.py - SEARCH WITH CONTEXT SUMMARY
+# RAG_Core/agents/retriever_agent.py - FIXED: Use contextualized_question
 
 from typing import Dict, Any, List
 from models.llm_model import llm_model
@@ -17,16 +17,16 @@ class RetrieverAgent:
     def process(
             self,
             question: str,
-            context_summary: str = "",  # NEW: Accept context summary
-            is_followup: bool = False,  # NEW: Know if it's a follow-up
+            contextualized_question: str = "",  # NEW: Accept contextualized question
+            is_followup: bool = False,
             **kwargs
     ) -> Dict[str, Any]:
         """
         Tìm kiếm tài liệu liên quan đến câu hỏi
 
         Args:
-            question: Câu hỏi gốc
-            context_summary: Ngữ cảnh đã được làm rõ (dùng cho vector search)
+            question: Câu hỏi gốc (for logging)
+            contextualized_question: Câu hỏi đã được làm rõ (dùng để search)
             is_followup: Có phải follow-up question không
         """
         try:
@@ -34,13 +34,14 @@ class RetrieverAgent:
             # QUYẾT ĐỊNH QUERY CHO VECTOR SEARCH
             # ================================================================
 
-            # Nếu là follow-up và có context summary → dùng context summary
-            if is_followup and context_summary:
-                search_query = context_summary
-                logger.info(f"🔍 Using CONTEXT SUMMARY for vector search (follow-up)")
-                logger.debug(f"Context Summary: {context_summary[:200]}...")
+            # FIXED: Nếu là follow-up và có contextualized_question → dùng nó
+            if is_followup or contextualized_question:
+                search_query = contextualized_question
+                logger.info(f"🔍 Using CONTEXTUALIZED QUESTION for vector search (follow-up)")
+                logger.debug(f"Original: {question[:60]}")
+                logger.debug(f"Contextualized: {contextualized_question[:100]}")
             else:
-                # Không phải follow-up hoặc không có context → dùng câu hỏi gốc
+                # Không phải follow-up hoặc không có contextualized → dùng câu hỏi gốc
                 search_query = question
                 logger.info(f"🔍 Using ORIGINAL QUESTION for vector search")
 
@@ -78,19 +79,19 @@ class RetrieverAgent:
                 return {
                     "status": "NOT_FOUND",
                     "documents": search_results,  # Pass all to GRADER for reranking
-                    "search_query_used": "context_summary" if (is_followup and context_summary) else "question",
+                    "search_query_used": "contextualized" if (is_followup and contextualized_question) else "original",
                     "next_agent": "GRADER"
                 }
 
             logger.info(
                 f"✅ Found {len(relevant_docs)} relevant documents "
-                f"(searched with {'context' if is_followup and context_summary else 'question'})"
+                f"(searched with {'contextualized question' if is_followup and contextualized_question else 'original question'})"
             )
 
             return {
                 "status": "SUCCESS",
                 "documents": relevant_docs,
-                "search_query_used": "context_summary" if (is_followup and context_summary) else "question",
+                "search_query_used": "contextualized" if (is_followup and contextualized_question) else "original",
                 "next_agent": "GRADER"
             }
 

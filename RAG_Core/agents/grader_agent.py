@@ -1,4 +1,4 @@
-# RAG_Core/agents/grader_agent.py (RERANK WITH CONTEXT SUMMARY)
+# RAG_Core/agents/grader_agent.py - FIXED: Use contextualized_question
 
 from typing import Dict, Any, List
 from tools.vector_search import rerank_documents
@@ -17,17 +17,17 @@ class GraderAgent:
             self,
             question: str,
             documents: List[Dict[str, Any]],
-            context_summary: str = "",  # NEW: Accept context summary
-            is_followup: bool = False,  # NEW: Know if it's a follow-up
+            contextualized_question: str = "",  # NEW: Accept contextualized question
+            is_followup: bool = False,
             **kwargs
     ) -> Dict[str, Any]:
         """
         Đánh giá chất lượng tài liệu bằng reranking model
 
         Args:
-            question: Câu hỏi gốc
+            question: Câu hỏi gốc (for logging)
             documents: Danh sách tài liệu
-            context_summary: Ngữ cảnh đã được làm rõ (dùng cho rerank)
+            contextualized_question: Câu hỏi đã được làm rõ (dùng cho rerank)
             is_followup: Có phải follow-up question không
         """
         try:
@@ -44,13 +44,14 @@ class GraderAgent:
             # QUYẾT ĐỊNH QUERY CHO RERANKING
             # ================================================================
 
-            # Nếu là follow-up và có context summary → dùng context summary
-            if is_followup and context_summary:
-                rerank_query = context_summary
-                logger.info(f"📝 Using CONTEXT SUMMARY for reranking (follow-up)")
-                logger.debug(f"Context Summary: {context_summary[:200]}...")
+            # FIXED: Nếu là follow-up và có contextualized_question → dùng nó
+            if is_followup and contextualized_question:
+                rerank_query = contextualized_question
+                logger.info(f"📝 Using CONTEXTUALIZED QUESTION for reranking (follow-up)")
+                logger.debug(f"Original: {question[:60]}")
+                logger.debug(f"Contextualized: {contextualized_question[:100]}")
             else:
-                # Không phải follow-up hoặc không có context → dùng câu hỏi gốc
+                # Không phải follow-up hoặc không có contextualized → dùng câu hỏi gốc
                 rerank_query = question
                 logger.info(f"📝 Using ORIGINAL QUESTION for reranking")
 
@@ -62,7 +63,7 @@ class GraderAgent:
             logger.debug(f"Rerank query: {rerank_query[:100]}...")
 
             reranked_docs = rerank_documents.invoke({
-                "query": rerank_query,  # Sử dụng query đã quyết định
+                "query": rerank_query,  # ✅ Sử dụng contextualized question
                 "documents": documents
             })
 
@@ -97,7 +98,7 @@ class GraderAgent:
             if qualified_docs:
                 logger.info(
                     f"✅ Found {len(qualified_docs)} qualified documents "
-                    f"(reranked with {'context' if is_followup and context_summary else 'question'})"
+                    f"(reranked with {'contextualized question' if is_followup and contextualized_question else 'original question'})"
                 )
 
                 return {
@@ -110,7 +111,7 @@ class GraderAgent:
                             "description": doc.get("description", ""),
                             "rerank_score": round(doc.get("rerank_score", 0), 5),
                             "similarity_score": round(doc.get("similarity_score", 0), 5),
-                            "reranked_with": "context_summary" if (is_followup and context_summary) else "question"
+                            "reranked_with": "contextualized_question" if (is_followup and contextualized_question) else "original_question"
                         }
                         for doc in qualified_docs
                     ],

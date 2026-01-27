@@ -26,8 +26,8 @@ logger = logging.getLogger(__name__)
 
 
 class ChatbotState(TypedDict):
-    question: str
-    original_question: str
+    question: str  # This will be contextualized_question after supervisor
+    original_question: str  # NEW: Store original question
     history: List[Dict[str, str]]
     is_followup: bool
     context_summary: str
@@ -127,14 +127,14 @@ class RAGWorkflow:
 
     def _parallel_execution_node(self, state: ChatbotState) -> ChatbotState:
         """
-        UPDATED: Supervisor tự xử lý context, không cần context_processor
+        FIXED: Pass contextualized_question to agents properly
         """
         question = state["question"]
         history = state.get("history", [])
 
         logger.info("🚀 Starting parallel execution")
 
-        # Step 1: Supervisor (đã tự xử lý context)
+        # Step 1: Supervisor (tự xử lý context)
         supervisor_result = self._get_result_with_timeout(
             self.executor.submit(self._safe_execute_supervisor, question, history),
             timeout=20,
@@ -154,23 +154,24 @@ class RAGWorkflow:
 
         logger.info(
             f"📋 Supervisor: agent={supervisor_result.get('agent')}, "
-            f"follow-up={is_followup}, context='{context_summary[:50]}'"
+            f"follow-up={is_followup}\n"
+            f"   Original: {question[:60]}\n"
+            f"   Contextualized: {contextualized_question[:60]}"
         )
 
         # Step 2: FAQ + RETRIEVER in parallel
-        # FAQ uses contextualized_question
+        # ✅ BOTH use contextualized_question
         future_faq = self.executor.submit(
             self._safe_execute_faq,
-            contextualized_question,  # ← Use contextualized question
+            contextualized_question,  # ✅ Use contextualized
             is_followup,
             context_summary
         )
 
-        # RETRIEVER uses context_summary nếu là follow-up
         future_retriever = self.executor.submit(
             self._safe_execute_retriever,
-            question,  # Original question
-            context_summary,
+            question,  # original
+            contextualized_question,  # ✅ semantic query
             is_followup
         )
 
@@ -196,6 +197,7 @@ class RAGWorkflow:
 
         state["supervisor_classification"] = supervisor_result
         state["question"] = contextualized_question  # Use contextualized
+        state["original_question"] = question  # Keep original for reference
         state["is_followup"] = is_followup
         state["context_summary"] = context_summary
         state["faq_result"] = faq_result
@@ -256,24 +258,21 @@ class RAGWorkflow:
 
     def _safe_execute_retriever(
             self,
-            question: str,
-            context_summary: str = "",
+            original_question: str,
+            contextualized_question: str,
             is_followup: bool = False
     ) -> Dict[str, Any]:
-        """Execute retriever với context summary support"""
-        try:
-            import inspect
-            sig = inspect.signature(self.retriever_agent.process)
+        """
+        Retriever ALWAYS receives both original + contextualized question
+        """
 
-            if 'context_summary' in sig.parameters:
-                return self.retriever_agent.process(
-                    question=question,
-                    context_summary=context_summary,
-                    is_followup=is_followup
-                )
-            else:
-                logger.debug("Retriever doesn't support context, using question only")
-                return self.retriever_agent.process(question=question)
+        try:
+            return self.retriever_agent.process(
+                question=original_question,  # for logging
+                contextualized_question=contextualized_question,  # ✅ CORE
+                is_followup=is_followup
+            )
+
 
         except Exception as e:
             logger.error(f"RETRIEVER error: {e}")
@@ -282,6 +281,7 @@ class RAGWorkflow:
                 "documents": [],
                 "next_agent": "NOT_ENOUGH_INFO"
             }
+
 
     def _decision_router_node(self, state: ChatbotState) -> ChatbotState:
         """Router dựa trên kết quả parallel"""
@@ -314,11 +314,11 @@ class RAGWorkflow:
         return state
 
     def _grader_node(self, state: ChatbotState) -> ChatbotState:
-        """Grader với context summary"""
+        """Grader với contextualized_question"""
         try:
-            question = state["question"]
+            question = state["question"]  # This is already contextualized
+            original_question = state.get("original_question", question)
             documents = state.get("documents", [])
-            context_summary = state.get("context_summary", "")
             is_followup = state.get("is_followup", False)
 
             logger.info(f"📊 Grader: Processing {len(documents)} documents")
@@ -326,11 +326,12 @@ class RAGWorkflow:
             import inspect
             sig = inspect.signature(self.grader_agent.process)
 
-            if 'context_summary' in sig.parameters:
+            # ✅ Pass contextualized_question
+            if 'contextualized_question' in sig.parameters:
                 result = self.grader_agent.process(
-                    question=question,
+                    question=original_question,  # Original for logging
                     documents=documents,
-                    context_summary=context_summary,
+                    contextualized_question=question,  # ✅ This is contextualized
                     is_followup=is_followup
                 )
             else:
@@ -339,6 +340,7 @@ class RAGWorkflow:
                     documents=documents
                 )
 
+            # Enrich references
             if result.get("references"):
                 result["references"] = self._enrich_references_with_urls(
                     result["references"]
