@@ -1,4 +1,4 @@
-# RAG_Core/workflow/rag_workflow.py - FIXED: Complete with ChatbotState
+# RAG_Core/workflow/rag_workflow.py - FIXED: FAQ chỉ gọi LLM 1 lần
 
 from typing import Dict, Any, List, AsyncIterator
 from langgraph.graph import StateGraph
@@ -26,8 +26,8 @@ logger = logging.getLogger(__name__)
 
 
 class ChatbotState(TypedDict):
-    question: str  # This will be contextualized_question after supervisor
-    original_question: str  # NEW: Store original question
+    question: str
+    original_question: str
     history: List[Dict[str, str]]
     is_followup: bool
     context_summary: str
@@ -125,14 +125,23 @@ class RAGWorkflow:
             logger.error(f"Error enriching references: {e}")
             return references
 
+    # ================================================================
+    # PARALLEL EXECUTION - MODIFIED FOR STREAMING MODE
+    # ================================================================
+
     def _parallel_execution_node(self, state: ChatbotState) -> ChatbotState:
         """
-        FIXED: Pass contextualized_question to agents properly
+        FIXED: Kiểm tra nếu đang streaming → SKIP FAQ non-streaming
         """
         question = state["question"]
         history = state.get("history", [])
 
+        # ✅ CHECK: Nếu đang ở streaming mode → skip FAQ
+        skip_faq = state.get("streaming_mode", False)
+
         logger.info("🚀 Starting parallel execution")
+        if skip_faq:
+            logger.info("⏭️  Skipping FAQ non-streaming (streaming mode active)")
 
         # Step 1: Supervisor (tự xử lý context)
         supervisor_result = self._get_result_with_timeout(
@@ -160,26 +169,43 @@ class RAGWorkflow:
         )
 
         # Step 2: FAQ + RETRIEVER in parallel
-        # ✅ BOTH use contextualized_question
-        future_faq = self.executor.submit(
-            self._safe_execute_faq,
-            contextualized_question,  # ✅ Use contextualized
-            is_followup,
-            context_summary
-        )
+        # ✅ ONLY call FAQ if NOT streaming mode
+        if skip_faq:
+            # Streaming mode → placeholder FAQ result
+            faq_result = {
+                "status": "SKIPPED",
+                "answer": "",
+                "references": [],
+                "message": "FAQ skipped for streaming mode"
+            }
+        else:
+            # Non-streaming mode → call FAQ normally
+            future_faq = self.executor.submit(
+                self._safe_execute_faq,
+                contextualized_question,
+                is_followup,
+                context_summary
+            )
 
+            faq_result = self._get_result_with_timeout(
+                future_faq,
+                timeout=10,
+                default={"status": "ERROR", "answer": "", "references": []},
+                name="FAQ"
+            )
+
+            # Enrich FAQ references
+            if faq_result.get("references"):
+                faq_result["references"] = self._enrich_references_with_urls(
+                    faq_result["references"]
+                )
+
+        # RETRIEVER always runs (cần cho GRADER → GENERATOR)
         future_retriever = self.executor.submit(
             self._safe_execute_retriever,
-            question,  # original
-            contextualized_question,  # ✅ semantic query
+            question,
+            contextualized_question,
             is_followup
-        )
-
-        faq_result = self._get_result_with_timeout(
-            future_faq,
-            timeout=10,
-            default={"status": "ERROR", "answer": "", "references": []},
-            name="FAQ"
         )
 
         retriever_result = self._get_result_with_timeout(
@@ -189,15 +215,9 @@ class RAGWorkflow:
             name="RETRIEVER"
         )
 
-        # Enrich FAQ references
-        if faq_result.get("references"):
-            faq_result["references"] = self._enrich_references_with_urls(
-                faq_result["references"]
-            )
-
         state["supervisor_classification"] = supervisor_result
-        state["question"] = contextualized_question  # Use contextualized
-        state["original_question"] = question  # Keep original for reference
+        state["question"] = contextualized_question
+        state["original_question"] = question
         state["is_followup"] = is_followup
         state["context_summary"] = context_summary
         state["faq_result"] = faq_result
@@ -262,18 +282,13 @@ class RAGWorkflow:
             contextualized_question: str,
             is_followup: bool = False
     ) -> Dict[str, Any]:
-        """
-        Retriever ALWAYS receives both original + contextualized question
-        """
-
+        """Retriever ALWAYS receives both original + contextualized question"""
         try:
             return self.retriever_agent.process(
-                question=original_question,  # for logging
-                contextualized_question=contextualized_question,  # ✅ CORE
+                question=original_question,
+                contextualized_question=contextualized_question,
                 is_followup=is_followup
             )
-
-
         except Exception as e:
             logger.error(f"RETRIEVER error: {e}")
             return {
@@ -281,7 +296,6 @@ class RAGWorkflow:
                 "documents": [],
                 "next_agent": "NOT_ENOUGH_INFO"
             }
-
 
     def _decision_router_node(self, state: ChatbotState) -> ChatbotState:
         """Router dựa trên kết quả parallel"""
@@ -295,6 +309,7 @@ class RAGWorkflow:
             state["current_agent"] = supervisor_agent
             return state
 
+        # ✅ ONLY accept FAQ if status = SUCCESS (not SKIPPED)
         if faq_result.get("status") == "SUCCESS":
             logger.info("→ FAQ has answer")
             state["status"] = faq_result["status"]
@@ -316,7 +331,7 @@ class RAGWorkflow:
     def _grader_node(self, state: ChatbotState) -> ChatbotState:
         """Grader với contextualized_question"""
         try:
-            question = state["question"]  # This is already contextualized
+            question = state["question"]
             original_question = state.get("original_question", question)
             documents = state.get("documents", [])
             is_followup = state.get("is_followup", False)
@@ -326,12 +341,11 @@ class RAGWorkflow:
             import inspect
             sig = inspect.signature(self.grader_agent.process)
 
-            # ✅ Pass contextualized_question
             if 'contextualized_question' in sig.parameters:
                 result = self.grader_agent.process(
-                    question=original_question,  # Original for logging
+                    question=original_question,
                     documents=documents,
-                    contextualized_question=question,  # ✅ This is contextualized
+                    contextualized_question=question,
                     is_followup=is_followup
                 )
             else:
@@ -340,7 +354,6 @@ class RAGWorkflow:
                     documents=documents
                 )
 
-            # Enrich references
             if result.get("references"):
                 result["references"] = self._enrich_references_with_urls(
                     result["references"]
@@ -444,11 +457,15 @@ class RAGWorkflow:
     def _route_next_agent(self, state: ChatbotState) -> str:
         return state.get("current_agent", "end")
 
+    # ================================================================
+    # NON-STREAMING RUN
+    # ================================================================
+
     def run(self, question: str, history: List[Dict[str, str]] = None) -> Dict[str, Any]:
-        """Non-streaming run"""
+        """Non-streaming run - FAQ gọi LLM 1 lần"""
         try:
-            initial_state = self._create_initial_state(question, history)
-            logger.info(f"🚀 Workflow start: {question[:100]}")
+            initial_state = self._create_initial_state(question, history, streaming_mode=False)
+            logger.info(f"🚀 Workflow start (non-streaming): {question[:100]}")
             final_state = self.workflow.invoke(initial_state)
 
             return {
@@ -464,57 +481,105 @@ class RAGWorkflow:
                 "status": "ERROR"
             }
 
+    # ================================================================
+    # STREAMING RUN - FIXED
+    # ================================================================
+
     async def run_with_streaming(
             self,
             question: str,
             history: List[Dict[str, str]] = None
     ) -> Dict[str, Any]:
         """
-        UPDATED: FAQ có thể stream trực tiếp
+        FIXED: Check FAQ confidence trước khi stream
         """
         try:
             logger.info(f"🚀 Streaming workflow start: {question[:100]}")
 
-            initial_state = self._create_initial_state(question, history)
+            initial_state = self._create_initial_state(question, history, streaming_mode=True)
+
             state = self._parallel_execution_node(initial_state)
             state = self._decision_router_node(state)
 
             current_agent = state.get("current_agent")
+            supervisor_agent = state.get("supervisor_classification", {}).get("agent")
+
             logger.info(f"📍 Routed to: {current_agent}")
+            logger.info(f"📍 Supervisor classified as: {supervisor_agent}")
 
-            # FAQ - STREAM FROM LLM
-            if current_agent == "end":
-                faq_result = state.get("faq_result", {})
+            # ================================================================
+            # FAQ - QUICK CONFIDENCE CHECK TRƯỚC KHI STREAM
+            # ================================================================
 
-                if faq_result.get("status") == "SUCCESS":
-                    logger.info("✅ FAQ SUCCESS - STREAMING from LLM")
+            if supervisor_agent == "FAQ":
+                logger.info("🔍 FAQ classified - checking confidence...")
 
-                    return {
-                        "answer_stream": self.faq_agent.process_streaming(
-                            question=state["question"],
-                            is_followup=state.get("is_followup", False),
-                            context=state.get("context_summary", "")
-                        ),
-                        "references": faq_result.get("references", []),
-                        "status": "STREAMING"
-                    }
+                # ✅ QUICK CHECK: Vector search + Rerank (NO LLM yet)
+                from tools.vector_search import search_faq, rerank_faq
+                from config.settings import settings
+
+                # Vector search
+                faq_results = search_faq.invoke({"query": state["question"]})
+
+                if not faq_results or "error" in str(faq_results):
+                    logger.warning("❌ FAQ vector search failed → GRADER")
+                    current_agent = "GRADER"
                 else:
-                    answer_text = state.get("answer", "Không có câu trả lời")
+                    # Filter by vector threshold
+                    filtered_faqs = [
+                        faq for faq in faq_results
+                        if faq.get("similarity_score", 0) >= settings.FAQ_VECTOR_THRESHOLD
+                    ]
 
-                    async def static_generator():
-                        words = answer_text.split()
-                        for word in words:
-                            yield word + " "
-                            await asyncio.sleep(0.01)
+                    if not filtered_faqs:
+                        logger.info("⚠️  No FAQ above vector threshold → GRADER")
+                        current_agent = "GRADER"
+                    else:
+                        # Rerank to check confidence
+                        reranked_faqs = rerank_faq.invoke({
+                            "query": state["question"],
+                            "faq_results": filtered_faqs
+                        })
 
-                    return {
-                        "answer_stream": static_generator(),
-                        "references": state.get("references", []),
-                        "status": state.get("status", "SUCCESS")
-                    }
+                        if not reranked_faqs:
+                            logger.warning("❌ FAQ rerank failed → GRADER")
+                            current_agent = "GRADER"
+                        else:
+                            best_score = reranked_faqs[0].get("rerank_score", 0)
 
+                            logger.info(f"📊 FAQ best rerank score: {best_score:.3f}")
+
+                            # ✅ CHECK CONFIDENCE
+                            if best_score >= settings.FAQ_RERANK_THRESHOLD:
+                                logger.info("✅ FAQ CONFIDENT - Streaming answer")
+
+                                # Stream từ LLM (1 lần duy nhất)
+                                return {
+                                    "answer_stream": self.faq_agent.process_streaming(
+                                        question=state["question"],
+                                        is_followup=state.get("is_followup", False),
+                                        context=state.get("context_summary", "")
+                                    ),
+                                    "references": [
+                                        {
+                                            "document_id": reranked_faqs[0].get("faq_id"),
+                                            "type": "FAQ",
+                                            "description": reranked_faqs[0].get("question", ""),
+                                            "rerank_score": round(best_score, 4)
+                                        }
+                                    ],
+                                    "status": "STREAMING"
+                                }
+                            else:
+                                logger.info(
+                                    f"⚠️  FAQ not confident ({best_score:.3f} < {settings.FAQ_RERANK_THRESHOLD}) → GRADER")
+                                current_agent = "GRADER"
+
+            # ================================================================
             # GRADER → GENERATOR or NOT_ENOUGH_INFO
-            elif current_agent == "GRADER":
+            # ================================================================
+
+            if current_agent == "GRADER":
                 state = self._grader_node(state)
 
                 if state.get("current_agent") == "GENERATOR":
@@ -543,6 +608,10 @@ class RAGWorkflow:
                         "references": [{"document_id": "llm_knowledge", "type": "GENERAL_KNOWLEDGE"}],
                         "status": "STREAMING"
                     }
+
+            # ================================================================
+            # OTHER AGENTS (unchanged)
+            # ================================================================
 
             elif current_agent == "CHATTER":
                 logger.info("✅ STREAMING: CHATTER")
@@ -612,8 +681,17 @@ class RAGWorkflow:
                 "status": "ERROR"
             }
 
-    def _create_initial_state(self, question: str, history: List = None) -> ChatbotState:
-        """Create initial state"""
+    # ================================================================
+    # HELPER
+    # ================================================================
+
+    def _create_initial_state(
+            self,
+            question: str,
+            history: List = None,
+            streaming_mode: bool = False
+    ) -> ChatbotState:
+        """Create initial state với streaming_mode flag"""
         return ChatbotState(
             question=question,
             original_question=question,
@@ -631,7 +709,8 @@ class RAGWorkflow:
             supervisor_classification={},
             faq_result={},
             retriever_result={},
-            parallel_mode=False
+            parallel_mode=False,
+            streaming_mode=streaming_mode
         )
 
     def __del__(self):
