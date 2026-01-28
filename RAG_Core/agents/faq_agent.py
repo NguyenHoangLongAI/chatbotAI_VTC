@@ -146,6 +146,7 @@ Trả lời:"""
     async def process_streaming(
             self,
             question: str,
+            reranked_faqs: List[Dict[str, Any]] = None,
             is_followup: bool = False,
             context: str = "",
             **kwargs
@@ -154,86 +155,22 @@ Trả lời:"""
         REAL STREAMING: Always use LLM streaming
         """
         try:
-            logger.info("=" * 50)
-            logger.info("🤖 FAQ AGENT PROCESSING (STREAMING)")
-            logger.info("=" * 50)
-            logger.info(f"📝 Question: '{question[:100]}'")
+            logger.info("🤖 FAQ AGENT STREAMING (LLM ONLY)")
 
-            # Vector search
-            logger.info(f"🔍 STEP 1: Vector Search")
-            faq_results = search_faq.invoke({"query": question})
-
-            if not faq_results or "error" in str(faq_results):
-                logger.warning("❌ Vector search failed")
-                yield "Không tìm thấy câu trả lời phù hợp. Hệ thống sẽ tìm kiếm trong tài liệu."
-                return
-
-            # Filter by threshold
-            filtered_faqs = [
-                faq for faq in faq_results
-                if faq.get("similarity_score", 0) >= self.vector_threshold
-            ]
-
-            if not filtered_faqs:
-                logger.info(f"⚠️  No FAQ passed vector threshold")
-                yield "Không tìm thấy câu trả lời phù hợp. Hệ thống sẽ tìm kiếm trong tài liệu."
-                return
-
-            logger.info(f"✅ Found {len(filtered_faqs)} FAQs")
-
-            # Rerank
-            logger.info(f"🎯 STEP 2: Reranking")
-            reranked_faqs = rerank_faq.invoke({
-                "query": question,
-                "faq_results": filtered_faqs
-            })
-
+            # ✅ SKIP search + rerank
             if not reranked_faqs:
-                logger.error("❌ Reranking failed")
-                yield "Không tìm thấy câu trả lời phù hợp. Hệ thống sẽ tìm kiếm trong tài liệu."
+                yield "Không tìm thấy câu trả lời."
                 return
 
-            best_faq = reranked_faqs[0]
-            rerank_score = best_faq.get("rerank_score", 0)
+            logger.info(f"📊 Received {len(reranked_faqs)} pre-ranked FAQs")
 
-            logger.info(f"📊 Best rerank score: {rerank_score:.3f}")
-
-            # Check confidence
-            if rerank_score < self.rerank_threshold:
-                logger.info(f"⚠️  Not confident enough → route to retriever")
-                yield "Không tìm thấy câu trả lời phù hợp. Hệ thống sẽ tìm kiếm trong tài liệu."
-                return
-
-            # STREAM FROM LLM
-            logger.info(f"🚀 STEP 3: Streaming from LLM")
-
+            # ✅ CHỈ STREAM TỪ LLM
             faq_text = self._format_reranked_faq(reranked_faqs[:3])
-
-            prompt = self.llm_prompt.format(
-                question=question,
-                faq_results=faq_text
-            )
-
-            chunk_count = 0
-            full_response = ""
+            prompt = self.llm_prompt.format(question=question, faq_results=faq_text)
 
             async for chunk in llm_model.astream(prompt):
                 if chunk:
-                    chunk_count += 1
-                    full_response += chunk
-                    logger.debug(f"Chunk #{chunk_count}: {chunk[:30]}...")
                     yield chunk
-
-            logger.info(f"✅ Streamed {chunk_count} chunks")
-            logger.info(f"📝 Full response length: {len(full_response)}")
-
-            # Check if LLM said "NOT_FOUND"
-            if "NOT_FOUND" in full_response.upper():
-                logger.info("⚠️  LLM determined FAQ not sufficient")
-                # Already yielded the response, just log
-                return
-
-            logger.info("=" * 50 + "\n")
 
         except Exception as e:
             logger.error(f"❌ FAQ streaming error: {e}", exc_info=True)

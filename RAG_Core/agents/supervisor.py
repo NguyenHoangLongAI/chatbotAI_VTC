@@ -36,32 +36,23 @@ class SupervisorAgent:
         - Phân tích xem câu hỏi có phải follow-up (tiếp theo cuộc trò chuyện trước) không
             - Truy vết lịch sử để xác định chính xác đối tượng được nhắc tới.
             - Đặc biệt chú ý các cụm:
-             "thành phần thứ X", "phần này", "nó", "ý trên", "cái đó", "OK", "chi tiết",..
+             "thành phần thứ X", "phần này", "nó", "ý trên", "cái đó", "OK","có", "chi tiết","hãy hướng dẫn", "tiếp tục" ...
             - Nếu lịch sử có DANH SÁCH ĐÁNH SỐ → ánh xạ theo ĐÚNG THỨ TỰ.
-            - Nếu có yêu cầu hành động không cụ thể ("OK",...) → dựa vào lịch sử hội thoại làm rõ yêu cầu
-            - Viết lại câu hỏi bằng TIẾNG VIỆT RÕ NGHĨA
+            - Nếu có yêu cầu hành động không cụ thể ("OK","có", "chi tiết","hãy hướng dẫn", "tiếp tục"...) → dựa vào lịch sử hội thoại làm rõ yêu cầu
+            - Viết lại câu hỏi (contextualized_question) bằng TIẾNG VIỆT ĐẦY ĐỦ – RÕ NGHĨA – CÓ NGỮ CẢNH. 
+            -Đảm bảo câu hỏi được làm rõ (contextualized_question) phải có:
+                - ĐỐI TƯỢNG cụ thể là gì
+                - HÀNH ĐỘNG cụ thể là gì
+                - Trong NGỮ CẢNH cụ thể là gì
         - Nếu không phải follow-up: contextualized_question = câu hỏi gốc, context_summary = "Câu hỏi độc lập"
 
         Hãy trả lời đúng định dạng JSON:
         {{
           "is_followup": true hoặc false,
-          "contextualized_question": "Câu hỏi đã được làm rõ rất cụ thể (nếu là follow-up) hoặc câu hỏi gốc",
+          "contextualized_question": "Câu hỏi đã được làm rõ rất cụ thể hoặc câu hỏi gốc",
           "context_summary": "Tóm tắt ngắn gọn ngữ cảnh BẰNG TIẾNG VIỆT",
           "agent": "FAQ" hoặc "CHATTER" hoặc "REPORTER" hoặc "OTHER"
         }}
-
-        Ví dụ:
-        - Nếu câu hỏi: "Nó hoạt động như thế nào?" sau khi hỏi về "AI là gì?"
-          → is_followup: true
-          → contextualized_question: "AI hoạt động như thế nào?"
-          → context_summary: "Tiếp tục về chủ đề AI"
-          → agent: "FAQ"
-
-        - Nếu câu hỏi: "Tôi cần hỗ trợ khẩn cấp"
-          → is_followup: false
-          → contextualized_question: "Tôi cần hỗ trợ khẩn cấp"
-          → context_summary: "Câu hỏi độc lập"
-          → agent: "FAQ"
 
         Chỉ trả về JSON, không thêm text nào khác."""
 
