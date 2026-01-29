@@ -20,7 +20,7 @@ class Config:
         "TESSDATA_PREFIX", "/usr/share/tesseract-ocr/4.00/tessdata"
     )
 
-    # ===== DOCLING SETTINGS (NEW) =====
+    # ===== DOCLING SETTINGS =====
     # Enable/disable Docling processor
     USE_DOCLING: bool = os.getenv("USE_DOCLING", "true").lower() == "true"
 
@@ -30,8 +30,15 @@ class Config:
     # OCR languages (comma-separated)
     OCR_LANGUAGES: str = os.getenv("OCR_LANGUAGES", "vi,en")
 
-    # Use GPU for OCR (EasyOCR)
-    OCR_USE_GPU: bool = os.getenv("OCR_USE_GPU", "true").lower() == "true"
+    # Use GPU for processing (requires CUDA)
+    USE_GPU: bool = os.getenv("USE_GPU", "true").lower() == "true"
+
+    # Image scale for OCR (higher = better quality but slower)
+    # 1.0 = 108 DPI, 2.0 = 216 DPI, 3.0 = 324 DPI
+    IMAGE_SCALE: float = float(os.getenv("IMAGE_SCALE", "2.0"))
+
+    # Force full page OCR (slower but more accurate for scanned PDFs)
+    FORCE_FULL_PAGE_OCR: bool = os.getenv("FORCE_FULL_PAGE_OCR", "false").lower() == "true"
 
     @property
     def ocr_lang_list(self) -> list:

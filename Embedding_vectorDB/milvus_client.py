@@ -22,7 +22,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-class UnifiedMilvusManager:
+class MilvusManager:
     """Unified manager for all Milvus collections"""
 
     def __init__(
@@ -928,7 +928,7 @@ class UnifiedMilvusManager:
 async def main():
     """Test the Unified Milvus Manager"""
 
-    manager = UnifiedMilvusManager(
+    manager = MilvusManager(
         host=os.getenv("MILVUS_HOST", "localhost"),
         port=os.getenv("MILVUS_PORT", "19530")
     )

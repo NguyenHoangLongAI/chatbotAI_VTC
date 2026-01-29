@@ -1,46 +1,112 @@
 # Embedding_vectorDB/docling_processor.py
 """
 Docling-based Document Processor
-High-quality document to Markdown conversion
+High-quality document to Markdown conversion with optimized PDF OCR
 """
 
 from docling.document_converter import DocumentConverter, PdfFormatOption
 from docling.datamodel.base_models import InputFormat
-from docling.datamodel.pipeline_options import PdfPipelineOptions, EasyOcrOptions
+from docling.datamodel.pipeline_options import (
+    PdfPipelineOptions,
+    RapidOcrOptions,
+    TableStructureOptions,
+    TableFormerMode,
+    AcceleratorOptions,
+    AcceleratorDevice
+)
 from pathlib import Path
 from typing import Optional
 import logging
 import os
+import torch
 
 logger = logging.getLogger(__name__)
 
 
 class DoclingProcessor:
     """
-    Advanced document processor using Docling
+    Advanced document processor using Docling with optimized PDF OCR
+
+    Features:
+    - RapidOCR with torch backend for GPU acceleration
+    - Enhanced table structure recognition
+    - Automatic device detection (CUDA/CPU)
+    - Configurable image resolution for OCR
     """
 
-    def __init__(self, use_ocr: bool = True, ocr_lang: list = None):
+    def __init__(
+            self,
+            use_ocr: bool = True,
+            ocr_lang: list = None,
+            use_gpu: bool = True,
+            image_scale: float = 2.0,
+            force_full_page_ocr: bool = False
+    ):
         """
-        Initialize Docling processor
+        Initialize Docling processor with optimized settings
 
         Args:
             use_ocr: Enable OCR for scanned documents
             ocr_lang: OCR languages (default: ['vi', 'en'])
+            use_gpu: Use GPU acceleration if available
+            image_scale: Image resolution scale for OCR (default: 2.0 = 216 DPI)
+            force_full_page_ocr: Force OCR on all pages (slower but more accurate)
         """
         self.use_ocr = use_ocr
         self.ocr_lang = ocr_lang or ['vi', 'en']
+        self.image_scale = image_scale
+        self.force_full_page_ocr = force_full_page_ocr
+
+        # Detect GPU availability
+        self.has_gpu = torch.cuda.is_available() and use_gpu
+
+        # Configure accelerator options
+        accelerator_options = AcceleratorOptions(
+            num_threads=8,  # Number of threads for CPU operations
+            device=(AcceleratorDevice.CUDA if self.has_gpu
+                    else AcceleratorDevice.CPU)
+        )
+
+        if self.has_gpu:
+            logger.info("🚀 GPU acceleration enabled (CUDA)")
+        else:
+            logger.info("💻 Running on CPU mode")
 
         # Configure pipeline options
         pipeline_options = PdfPipelineOptions()
 
+        # Enable OCR with RapidOCR (GPU-accelerated by default)
         if self.use_ocr:
-            # Enable EasyOCR for better Vietnamese support
             pipeline_options.do_ocr = True
-            pipeline_options.ocr_options = EasyOcrOptions(
-                lang=self.ocr_lang,
-                use_gpu=True  # Use GPU if available
+
+            # RapidOCR options (simple config - GPU support automatic)
+            # Note: RapidOCR will use GPU if available automatically
+            pipeline_options.ocr_options = RapidOcrOptions(
+                force_full_page_ocr=force_full_page_ocr
             )
+
+            logger.info(
+                f"✅ OCR enabled: RapidOCR "
+                f"(force_full_page_ocr: {force_full_page_ocr})"
+            )
+
+        # Enable table structure recognition with accurate mode
+        pipeline_options.do_table_structure = True
+        pipeline_options.table_structure_options = TableStructureOptions(
+            do_cell_matching=True,  # Match back to PDF cells
+            mode=TableFormerMode.ACCURATE  # Use more accurate model
+        )
+
+        # Image generation settings
+        pipeline_options.generate_page_images = True
+        pipeline_options.generate_picture_images = True
+        pipeline_options.images_scale = self.image_scale  # Note: images_scale (plural)
+
+        # Enable code recognition
+        pipeline_options.do_code_enrichment = True
+
+        # Set accelerator options
+        pipeline_options.accelerator_options = accelerator_options
 
         # Configure format options
         self.format_options = {
@@ -54,9 +120,11 @@ class DoclingProcessor:
             format_options=self.format_options
         )
 
-        logger.info(
-            f"✅ Docling processor initialized (OCR={'enabled' if use_ocr else 'disabled'})"
-        )
+        logger.info("✅ Docling processor initialized successfully")
+        logger.info(f"   - OCR: {'enabled' if use_ocr else 'disabled'}")
+        logger.info(f"   - GPU: {'enabled (CUDA)' if self.has_gpu else 'disabled (CPU)'}")
+        logger.info(f"   - Table structure: accurate mode")
+        logger.info(f"   - Image scale: {image_scale}x (DPI: {int(108 * image_scale)})")
 
     def process_document(self, file_path: str) -> Optional[str]:
         """
@@ -184,12 +252,20 @@ class DoclingProcessor:
 _docling_processor = None
 
 
-def get_docling_processor(use_ocr: bool = True) -> DoclingProcessor:
+def get_docling_processor(
+        use_ocr: bool = True,
+        use_gpu: bool = True,
+        image_scale: float = 2.0,
+        force_full_page_ocr: bool = False
+) -> DoclingProcessor:
     """
     Get or create global Docling processor instance
 
     Args:
         use_ocr: Enable OCR
+        use_gpu: Use GPU if available
+        image_scale: Image resolution scale
+        force_full_page_ocr: Force OCR on all pages
 
     Returns:
         DoclingProcessor instance
@@ -197,6 +273,11 @@ def get_docling_processor(use_ocr: bool = True) -> DoclingProcessor:
     global _docling_processor
 
     if _docling_processor is None:
-        _docling_processor = DoclingProcessor(use_ocr=use_ocr)
+        _docling_processor = DoclingProcessor(
+            use_ocr=use_ocr,
+            use_gpu=use_gpu,
+            image_scale=image_scale,
+            force_full_page_ocr=force_full_page_ocr
+        )
 
     return _docling_processor
