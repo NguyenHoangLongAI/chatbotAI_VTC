@@ -55,7 +55,7 @@ class Settings(BaseSettings):
 
     # Public ngrok URL (for user-facing responses)
     # Example: "https://b1234567.ngrok-free.app"
-    NGROK_PUBLIC_URL: Optional[str] = "https://388ca155881e.ngrok-free.app"
+    NGROK_PUBLIC_URL: Optional[str] = "https://15a38b312f70.ngrok-free.app"
 
     # Enable URL replacement
     ENABLE_URL_REPLACEMENT: bool = True
@@ -65,7 +65,7 @@ class Settings(BaseSettings):
 
     # Maximum URLs to show in footer
     MAX_REFERENCE_URLS: int = 5
-
+    COHERE_API_KEY: str = "e756puaI9nSZlT967qamaJ7eUdeXh2neu8dy6lGF"
     # ===== Contact =====
     SUPPORT_PHONE: str = "Phòng vận hành 0904540490 - Phòng kinh doanh:0914616081"
 
