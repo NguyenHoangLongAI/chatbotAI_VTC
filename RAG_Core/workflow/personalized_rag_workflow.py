@@ -18,9 +18,11 @@ from agents.personalization_generator_agent import PersonalizationGeneratorAgent
 
 from agents.base_agent import (
     StreamingChatterAgent,
-    StreamingOtherAgent,
-    StreamingNotEnoughInfoAgent
+    StreamingOtherAgent
 )
+
+# NEW: Import personalized not enough info agent
+from agents.personalization_not_enough_info_agent import PersonalizationNotEnoughInfoAgent
 
 from services.document_url_service import document_url_service
 
@@ -69,7 +71,9 @@ class PersonalizedRAGWorkflow:
         # Streaming-enabled agents
         self.chatter_agent = StreamingChatterAgent()
         self.other_agent = StreamingOtherAgent()
-        self.not_enough_info_agent = StreamingNotEnoughInfoAgent()
+
+        # NEW: Personalized agent
+        self.not_enough_info_agent = PersonalizationNotEnoughInfoAgent()
 
         self.executor = ThreadPoolExecutor(max_workers=3, thread_name_prefix="PersonalizedRAG")
         self.workflow = self._create_workflow()
@@ -412,19 +416,35 @@ class PersonalizedRAGWorkflow:
             return state
 
     def _not_enough_info_node(self, state: PersonalizedChatbotState) -> PersonalizedChatbotState:
+        """NOT ENOUGH INFO node với personalization"""
         try:
+            logger.info("🎭 Using Personalized Not Enough Info")
+
             result = self.not_enough_info_agent.process(
-                state["question"],
-                is_followup=state.get("is_followup", False)
+                question=state["question"],
+                customer_name=state.get("customer_name", ""),
+                customer_introduction=state.get("customer_introduction", "")
             )
+
             state["status"] = result["status"]
             state["answer"] = result.get("answer", "")
             state["references"] = result.get("references", [])
             state["current_agent"] = "end"
             return state
+
         except Exception as e:
-            logger.error(f"Not enough info error: {e}")
-            state["answer"] = "Không tìm thấy thông tin"
+            logger.error(f"Personalized Not Enough Info error: {e}")
+
+            # Fallback with customer name if available
+            customer_name = state.get("customer_name", "")
+            greeting = f"Thưa Anh/Chị {customer_name}" if customer_name else "Xin chào"
+
+            state["answer"] = f"""{greeting},
+
+    Không tìm thấy thông tin phù hợp trong hệ thống.
+
+    Để được hỗ trợ tốt nhất, vui lòng liên hệ hotline: {settings.SUPPORT_PHONE}"""
+            state["current_agent"] = "end"
             return state
 
     def _chatter_node(self, state: PersonalizedChatbotState) -> PersonalizedChatbotState:
@@ -631,17 +651,17 @@ class PersonalizedRAGWorkflow:
                         "personalized": True
                     }
                 else:
-                    logger.info("✅ STREAMING: NOT_ENOUGH_INFO")
-                    from config.settings import settings
+                    logger.info("✅ STREAMING: PERSONALIZED NOT_ENOUGH_INFO")
 
                     return {
                         "answer_stream": self.not_enough_info_agent.process_streaming(
                             question=state["question"],
-                            support_phone=settings.SUPPORT_PHONE
+                            customer_name=state.get("customer_name", ""),
+                            customer_introduction=state.get("customer_introduction", "")
                         ),
                         "references": [{"document_id": "llm_knowledge", "type": "GENERAL_KNOWLEDGE"}],
                         "status": "STREAMING",
-                        "personalized": False
+                        "personalized": True  # Changed to True
                     }
 
             # Other agents (CHATTER, OTHER, REPORTER)
