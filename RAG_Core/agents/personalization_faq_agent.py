@@ -1,8 +1,7 @@
-# RAG_Core/agents/personalization_faq_agent.py
+# RAG_Core/agents/personalization_faq_agent.py - UPDATED TO USE PERSONALIZATION DB
 
 from typing import Dict, Any, List, AsyncIterator
 from models.llm_model import llm_model
-from tools.vector_search import search_faq, rerank_faq
 from config.settings import settings
 import logging
 
@@ -12,9 +11,10 @@ logger = logging.getLogger(__name__)
 class PersonalizationFAQAgent:
     """
     FAQ Agent với personalization tích hợp sẵn
+    UPDATED: Sử dụng personalization_milvus_client
 
     Chức năng:
-    - Tìm kiếm FAQ phù hợp
+    - Tìm kiếm FAQ phù hợp từ personalization database
     - Tự động cá nhân hóa câu trả lời dựa trên thông tin khách hàng
     - Hỗ trợ streaming
     """
@@ -134,20 +134,24 @@ Hãy trả lời:"""
     ) -> Dict[str, Any]:
         """
         Non-streaming process với personalization
+        UPDATED: Sử dụng search_personalization_faq
         """
         try:
             logger.info("=" * 50)
-            logger.info("🎭 PERSONALIZATION FAQ AGENT")
+            logger.info("🎭 PERSONALIZATION FAQ AGENT (Personalization DB)")
             logger.info("=" * 50)
             logger.info(f"📝 Question: '{question[:100]}'")
             logger.info(f"👤 Customer: {customer_name}")
 
-            # Vector search
-            faq_results = search_faq.invoke({"query": question})
+            # ✅ IMPORT PERSONALIZATION TOOLS
+            from tools.vector_search import search_personalization_faq, rerank_faq
+
+            # Vector search trong PERSONALIZATION DB
+            faq_results = search_personalization_faq.invoke({"query": question})
 
             if not faq_results or "error" in str(faq_results):
-                logger.warning("❌ Vector search failed")
-                return self._route_to_retriever("Vector search failed")
+                logger.warning("❌ Personalization vector search failed")
+                return self._route_to_retriever("Personalization vector search failed")
 
             # Filter by threshold
             filtered_faqs = [
@@ -159,9 +163,9 @@ Hãy trả lời:"""
                 logger.info(f"⚠️  No FAQ passed vector threshold {self.vector_threshold}")
                 return self._route_to_retriever("No FAQ above threshold")
 
-            logger.info(f"✅ Found {len(filtered_faqs)} FAQs above threshold")
+            logger.info(f"✅ Found {len(filtered_faqs)} FAQs above threshold (personalization DB)")
 
-            # Rerank
+            # Rerank (using standard Cohere reranker)
             logger.info(f"🎯 Reranking with Cohere")
             reranked_faqs = rerank_faq.invoke({
                 "query": question,
@@ -212,7 +216,7 @@ Hãy trả lời:"""
                 logger.warning("⚠️  Generated answer too short → RETRIEVER")
                 return self._route_to_retriever("Answer too short")
 
-            logger.info(f"✅ Personalized FAQ answer generated")
+            logger.info(f"✅ Personalized FAQ answer generated (from personalization DB)")
             logger.info("=" * 50 + "\n")
 
             return {
@@ -224,7 +228,8 @@ Hãy trả lời:"""
                         "document_id": best_faq.get("faq_id"),
                         "type": "FAQ",
                         "description": best_faq.get("question", ""),
-                        "rerank_score": round(rerank_score, 4)
+                        "rerank_score": round(rerank_score, 4),
+                        "source": "personalization_db"
                     }
                 ],
                 "personalized": True,
@@ -248,9 +253,10 @@ Hãy trả lời:"""
     ) -> AsyncIterator[str]:
         """
         Streaming với personalization
+        NOTE: reranked_faqs should come from personalization DB
         """
         try:
-            logger.info("🎭 Personalization FAQ streaming")
+            logger.info("🎭 Personalization FAQ streaming (personalization DB)")
             logger.info(f"   Customer: {customer_name}")
 
             if not reranked_faqs:
