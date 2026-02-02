@@ -125,12 +125,12 @@ class PersonalizationMilvusClient:
         return vector
 
     def search_documents(self, query_vector: np.ndarray, top_k: int = 5) -> List[Dict[str, Any]]:
-        """Search in personalization_default collection"""
+        """Search in personalization_db collection"""
         if not self.check_connection():
             raise ConnectionError("Milvus connection lost")
 
         try:
-            collection_name = "personalization_default"
+            collection_name = "personalization_db"
             collection = Collection(collection_name, using="personalization")
             collection.load()
 
@@ -160,7 +160,7 @@ class PersonalizationMilvusClient:
                         "similarity_score": hit.score
                     })
 
-            logger.info(f"✅ Found {len(documents)} docs from personalization_default")
+            logger.info(f"✅ Found {len(documents)} docs from personalization_db")
             return documents
 
         except Exception as e:
