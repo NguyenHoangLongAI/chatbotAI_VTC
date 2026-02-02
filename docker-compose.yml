@@ -109,10 +109,10 @@ services:
 
   # ================== OLLAMA (GPU) ==================
   ollama:
-    image: ollama/ollama:0.12.0        # pin version đủ mới cho gpt-oss
-    pull_policy: always                 # ép compose luôn kéo image mới
+    image: ollama/ollama:0.12.0
+    pull_policy: always
     container_name: ollama
-    runtime: nvidia  # Explicit nvidia runtime
+
     deploy:
       resources:
         reservations:
@@ -120,19 +120,22 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+
     environment:
       - NVIDIA_VISIBLE_DEVICES=0
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - CUDA_VISIBLE_DEVICES=0
       - OLLAMA_KEEP_ALIVE=4h
       - OLLAMA_NUM_PARALLEL=1
       - OLLAMA_FLASH_ATTENTION=1
-      - CUDA_VISIBLE_DEVICES=0
+
     ports:
       - "11434:11434"
     networks:
       - ai-net
     volumes:
       - ollama_models:/root/.ollama
+
     healthcheck:
       test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
       interval: 15s
@@ -228,6 +231,74 @@ services:
       retries: 40
       start_period: 180s
     restart: unless-stopped
+  # ================== PERSONALIZATION DOCUMENT API (PORT 8001) ==================
+  personalization-document-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - CUDA_VERSION=12.1.1
+    image: du-an-ai:latest
+    pull_policy: never
+    container_name: personalization-document-api
+    working_dir: /app/Embedding_vectorDB
+
+    # GPU configuration
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu, compute, utility]
+
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+      - NVIDIA_VISIBLE_DEVICES=0
+      - MILVUS_HOST=milvus
+      - MILVUS_PORT=19530
+      - MILVUS_PERSONALIZATION_DATABASE=personalization_db
+      - TESSDATA_PREFIX=/usr/share/tesseract-ocr/4.00/tessdata
+
+      # OCR Configuration
+      - OCR_USE_GPU=false
+      - USE_DOCLING=true
+      - USE_OCR=true
+      - OCR_LANGUAGES=vi,en
+
+      # MinIO Configuration for personalization
+      - MINIO_PERSONALIZATION_BUCKET=personalization-documents
+      - MINIO_INTERNAL_ENDPOINT=minio:9000
+      - MINIO_PUBLIC_ENDPOINT=localhost:9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin
+      - MINIO_SECURE=false
+
+    command: ["uvicorn", "personalization_api_main:app", "--host", "0.0.0.0", "--port", "8001"]
+
+    volumes:
+      - ./uploads:/app/uploads
+      - ./models:/app/models
+      - ./Embedding_vectorDB:/app/Embedding_vectorDB
+
+    ports:
+      - "8001:8001"
+
+    networks:
+      - ai-net
+
+    depends_on:
+      milvus: { condition: service_healthy }
+      minio:  { condition: service_healthy }
+
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import socket,sys; s=socket.socket(); s.settimeout(2); sys.exit(0 if s.connect_ex(('127.0.0.1',8001))==0 else 1)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 40
+      start_period: 180s
+
+    restart: unless-stopped
 
   # ================== RAG CORE API ==================
   rag-api:
@@ -294,3 +365,5 @@ services:
       retries: 20
       start_period: 30s
     restart: unless-stopped
+
+
